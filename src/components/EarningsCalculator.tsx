@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { CURRENCIES, LEAGUE_BLOCK_REWARDS } from '../constants';
-import { CurrencyType, League } from '../types';
+import { CURRENCIES, LEAGUE_BLOCK_REWARDS, ASSET_URLS } from '../constants';
+import { CurrencyType, League, GlobalSettings } from '../types';
+import { fetchSettings } from '../services/apiService';
 import { TrendingUp, Zap, Trophy, Globe, Coins, ClipboardPaste, X, Check, HelpCircle, Settings, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -57,7 +58,7 @@ export default function EarningsCalculator() {
     const saved = localStorage.getItem('rollercoin_selected_league');
     return (saved as League) || 'BRONZE I';
   });
-  const [userPower, setUserPower] = useState<number>(() => {
+  const [userPower, setUserPower] = useState<number | string>(() => {
     const saved = localStorage.getItem('rollercoin_user_power');
     return saved ? parseFloat(saved) : 0;
   });
@@ -70,7 +71,7 @@ export default function EarningsCalculator() {
   const [pasteText, setPasteText] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsModalType, setSettingsModalType] = useState<CurrencyType | null>(null);
-  const [currencyOverrides, setCurrencyOverrides] = useState<Record<string, { blockReward?: number; blockTime?: number }>>(() => {
+  const [currencyOverrides, setCurrencyOverrides] = useState<Record<string, { blockReward?: number | string; blockTime?: number | string }>>(() => {
     const saved = localStorage.getItem('rollercoin_currency_overrides');
     return saved ? JSON.parse(saved) : {};
   });
@@ -79,6 +80,20 @@ export default function EarningsCalculator() {
 
   const [isMarketPricesOpen, setIsMarketPricesOpen] = useState(false);
   const [isMinWithdrawalsOpen, setIsMinWithdrawalsOpen] = useState(false);
+
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await fetchSettings();
+        setGlobalSettings(settings);
+      } catch (err) {
+        console.error('Failed to load global settings:', err);
+      }
+    };
+    loadSettings();
+  }, []);
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [isFetchingPrices, setIsFetchingPrices] = useState(false);
@@ -141,7 +156,7 @@ export default function EarningsCalculator() {
   }, [selectedLeague, userPower, powerUnit, currencyOverrides, customNetworkPowers, distribution]);
 
   const totalUserPowerTh = useMemo(() => {
-    let base = userPower;
+    let base = typeof userPower === 'string' ? (parseFloat(userPower) || 0) : userPower;
     if (powerUnit === 'Gh') base /= 1000;
     if (powerUnit === 'Ph') base *= 1000;
     if (powerUnit === 'Eh') base *= 1000000;
@@ -200,9 +215,9 @@ export default function EarningsCalculator() {
     
     // Use overrides if available
     const overrides = currencyOverrides[currency.id] || {};
-    const baseReward = LEAGUE_BLOCK_REWARDS[selectedLeague]?.[currency.id] ?? currency.blockReward;
-    const blockReward = overrides.blockReward ?? baseReward;
-    const blockTime = overrides.blockTime ?? currency.blockTime;
+    const baseReward = globalSettings?.blockRewards?.[selectedLeague]?.[currency.id] ?? LEAGUE_BLOCK_REWARDS[selectedLeague]?.[currency.id] ?? currency.blockReward;
+    const blockReward = (overrides.blockReward !== undefined && overrides.blockReward !== '') ? Number(overrides.blockReward) : baseReward;
+    const blockTime = (overrides.blockTime !== undefined && overrides.blockTime !== '') ? Number(overrides.blockTime) : (globalSettings?.blockTimes?.[selectedLeague]?.[currency.id] ?? currency.blockTime);
     
     // Use live price if available, otherwise fallback to default
     const currentPrice = livePrices[currency.id] || currency.price;
@@ -363,7 +378,7 @@ export default function EarningsCalculator() {
                     <td className="w-16 px-4 sticky left-0 z-10 bg-[#141c2f] group-hover:bg-[#1e293b] transition-colors">
                       <div className="w-10 h-10 flex items-center justify-center mx-auto overflow-hidden">
                         <img 
-                          src={`/currencies/${c.id}.svg`}
+                          src={ASSET_URLS.currency(c.id)}
                           alt={c.symbol}
                           className="w-full h-full object-contain p-1.5"
                           onError={(e) => {
@@ -424,8 +439,8 @@ export default function EarningsCalculator() {
     );
   };
 
-  const getStep = (value: number | undefined | null) => {
-    if (value === undefined || value === null) return 1;
+  const getStep = (value: number | string | undefined | null) => {
+    if (value === undefined || value === null || value === '') return 1;
     const str = value.toString();
     if (!str.includes('.')) return 1;
     const decimalPart = str.split('.')[1];
@@ -469,7 +484,11 @@ export default function EarningsCalculator() {
                 type="number"
                 step={getStep(userPower)}
                 value={userPower}
-                onChange={(e) => setUserPower(Number(e.target.value))}
+                min="0"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setUserPower(val === '' ? '' : (parseFloat(val) < 0 ? 0 : val));
+                }}
                 className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-2xl px-4 py-3.5 text-white font-bold focus:outline-none focus:border-emerald-500 transition-all shadow-inner"
               />
               <select
@@ -605,7 +624,7 @@ export default function EarningsCalculator() {
                               <div className="flex items-center gap-2">
                                 <div className="w-6 h-6 flex items-center justify-center overflow-hidden">
                                   <img 
-                                    src={`/currencies/${c.id}.svg`}
+                                    src={ASSET_URLS.currency(c.id)}
                                     alt={c.symbol}
                                     className="w-full h-full object-contain p-0.5"
                                     onError={(e) => {
@@ -681,7 +700,7 @@ export default function EarningsCalculator() {
                               <div className="flex items-center gap-2">
                                 <div className="w-6 h-6 flex items-center justify-center overflow-hidden">
                                   <img 
-                                    src={`/currencies/${c.id}.svg`}
+                                    src={ASSET_URLS.currency(c.id)}
                                     alt={c.symbol}
                                     className="w-full h-full object-contain p-0.5"
                                     onError={(e) => {
@@ -802,7 +821,7 @@ export default function EarningsCalculator() {
                             <div className="flex items-center justify-center">
                               <div className="w-8 h-8 flex items-center justify-center overflow-hidden shrink-0">
                                 <img 
-                                  src={`/currencies/${c.id}.svg`}
+                                  src={ASSET_URLS.currency(c.id)}
                                   alt={c.symbol}
                                   className="w-full h-full object-contain p-1"
                                   onError={(e) => {
@@ -819,11 +838,12 @@ export default function EarningsCalculator() {
                               type="number"
                               step={step}
                               value={blockReward}
+                              min="0"
                               onChange={(e) => {
-                                const val = parseFloat(e.target.value);
+                                const val = e.target.value;
                                 setCurrencyOverrides(prev => ({
                                   ...prev,
-                                  [c.id]: { ...prev[c.id], blockReward: isNaN(val) ? 0 : val }
+                                  [c.id]: { ...prev[c.id], blockReward: val === '' ? '' : (parseFloat(val) < 0 ? 0 : val) }
                                 }));
                               }}
                               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-bold text-center focus:outline-none focus:border-emerald-500 transition-all"
@@ -835,11 +855,12 @@ export default function EarningsCalculator() {
                               type="number"
                               step={getStep(currencyOverrides[c.id]?.blockTime ?? c.blockTime)}
                               value={currencyOverrides[c.id]?.blockTime ?? c.blockTime}
+                              min="0"
                               onChange={(e) => {
-                                const val = parseInt(e.target.value);
+                                const val = e.target.value;
                                 setCurrencyOverrides(prev => ({
                                   ...prev,
-                                  [c.id]: { ...prev[c.id], blockTime: isNaN(val) ? 0 : val }
+                                  [c.id]: { ...prev[c.id], blockTime: val === '' ? '' : (parseFloat(val) < 0 ? 0 : val) }
                                 }));
                               }}
                               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-bold text-center focus:outline-none focus:border-emerald-500 transition-all"

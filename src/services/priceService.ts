@@ -1,11 +1,11 @@
 const COINGECKO_IDS: Record<string, string> = {
   btc: 'bitcoin',
-  eth: 'ethereum',
-  doge: 'dogecoin',
   ltc: 'litecoin',
   bnb: 'binancecoin',
   pol: 'polygon-ecosystem-token',
   xrp: 'ripple',
+  doge: 'dogecoin',
+  eth: 'ethereum',
   trx: 'tron',
   sol: 'solana',
   algo: 'algorand',

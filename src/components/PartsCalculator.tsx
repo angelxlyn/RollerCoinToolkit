@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Rarity, PartType } from '../types';
-import { CONVERSION_RATES, RARITY_COLORS } from '../constants';
+import { CONVERSION_RATES, RARITY_COLORS, ASSET_URLS, PART_MARKET_BASE_URL, PART_IDS } from '../constants';
 import { ShoppingBag, ClipboardPaste, X, HelpCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { AnimatePresence, motion } from 'motion/react';
@@ -9,13 +9,13 @@ const STORAGE_KEY = 'rollercoin_parts_prices';
 
 const PART_RARITIES = [Rarity.COMMON, Rarity.UNCOMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY];
 
-const DEFAULT_PRICES: Record<PartType, Record<Rarity, number>> = Object.values(PartType).reduce((acc, type) => {
+const DEFAULT_PRICES: Record<PartType, Partial<Record<Rarity, number>>> = Object.values(PartType).reduce((acc, type) => {
   acc[type] = PART_RARITIES.reduce((rAcc, rarity) => {
     rAcc[rarity] = 0;
     return rAcc;
-  }, {} as Record<Rarity, number>);
+  }, {} as Partial<Record<Rarity, number>>);
   return acc;
-}, {} as Record<PartType, Record<Rarity, number>>);
+}, {} as Record<PartType, Partial<Record<Rarity, number>>>);
 
 const FORGE_LEVELS = [
   { level: 1, discount: 0 },
@@ -40,6 +40,7 @@ const RARITY_BORDER_COLORS: Record<Rarity, string> = {
   [Rarity.EPIC]: 'border-purple-500/50',
   [Rarity.LEGENDARY]: 'border-yellow-500/50',
   [Rarity.UNREAL]: 'border-cyan-500/50',
+  [Rarity.LEGACY]: 'border-slate-500/50',
 };
 
 export default function PartsCalculator() {
@@ -47,7 +48,7 @@ export default function PartsCalculator() {
   const [targetQuantity, setTargetQuantity] = useState<number | string>(1);
   const [forgeLevel, setForgeLevel] = useState(1);
   const [selectedPartType, setSelectedPartType] = useState<PartType>(PartType.FAN);
-  const [allPrices, setAllPrices] = useState<Record<PartType, Record<Rarity, number>>>(() => {
+  const [allPrices, setAllPrices] = useState<Record<PartType, Partial<Record<Rarity, number | string>>>>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return DEFAULT_PRICES;
     try {
@@ -71,7 +72,7 @@ export default function PartsCalculator() {
 
   const prices = allPrices[selectedPartType];
 
-  const setPrices = (newPrices: Record<Rarity, number>) => {
+  const setPrices = (newPrices: Record<Rarity, number | string>) => {
     setAllPrices(prev => ({
       ...prev,
       [selectedPartType]: newPrices
@@ -163,10 +164,12 @@ export default function PartsCalculator() {
       const { totalParts, totalFee } = getPathData(r, targetRarity);
       const finalCount = totalParts * qty;
       const finalFee = totalFee * qty;
-      const totalPartCost = finalCount * prices[r];
+      const price = typeof prices[r] === 'string' ? (parseFloat(prices[r] as string) || 0) : (prices[r] as number);
+      const totalPartCost = finalCount * price;
       const totalCost = totalPartCost + finalFee;
 
-      const directBuyTotal = prices[targetRarity] * qty;
+      const targetPrice = typeof prices[targetRarity] === 'string' ? (parseFloat(prices[targetRarity] as string) || 0) : (prices[targetRarity] as number);
+      const directBuyTotal = targetPrice * qty;
 
       return {
         rarity: r,
@@ -194,7 +197,7 @@ export default function PartsCalculator() {
   }, [targetRarity, targetQuantity, forgeLevel, prices]);
 
   const getPartImage = (type: PartType, rarity: Rarity) => {
-    return `/parts/${type.toLowerCase()}${rarity}.png`;
+    return ASSET_URLS.part(type, rarity);
   };
 
   const formatRLT = (value: number) => {
@@ -205,8 +208,8 @@ export default function PartsCalculator() {
     });
   };
 
-  const getStep = (value: number | undefined | null) => {
-    if (value === undefined || value === null) return 1;
+  const getStep = (value: number | string | undefined | null) => {
+    if (value === undefined || value === null || value === '') return 1;
     const str = value.toString();
     if (!str.includes('.')) return 1;
     const decimalPart = str.split('.')[1];
@@ -327,14 +330,20 @@ export default function PartsCalculator() {
               {PART_RARITIES.map((r) => (
                 <div key={r} className="flex items-center gap-3 group">
                   <div className="relative shrink-0">
-                    <div className="w-10 h-10 flex items-center justify-center overflow-hidden">
+                    <a 
+                      href={`${PART_MARKET_BASE_URL}${PART_IDS[selectedPartType]?.[r] || ''}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-10 h-10 flex items-center justify-center overflow-hidden hover:scale-110 transition-transform cursor-pointer"
+                      title={`View ${r} ${selectedPartType} on Marketplace`}
+                    >
                       <img 
                         src={getPartImage(selectedPartType, r)}
                         alt={`${r} ${selectedPartType}`}
                         className="w-10 h-10 object-contain"
                         referrerPolicy="no-referrer"
                       />
-                    </div>
+                    </a>
                   </div>
                   <div className="flex-1">
                     <input
@@ -343,8 +352,8 @@ export default function PartsCalculator() {
                       step={getStep(prices[r])}
                       min="0"
                       onChange={(e) => {
-                        const val = Number(e.target.value);
-                        setPrices({ ...prices, [r]: Math.max(0, val) });
+                        const val = e.target.value;
+                        setPrices({ ...prices, [r]: val === '' ? '' : (parseFloat(val) < 0 ? 0 : val) });
                       }}
                       className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-emerald-500 transition-all hover:border-slate-600"
                       placeholder="0.000"
@@ -415,14 +424,20 @@ export default function PartsCalculator() {
                   {/* Header Section */}
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center shrink-0 overflow-hidden">
+                      <a 
+                        href={`${PART_MARKET_BASE_URL}${PART_IDS[selectedPartType]?.[option.rarity] || ''}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center shrink-0 overflow-hidden hover:opacity-80 transition-opacity"
+                        title="View on Marketplace"
+                      >
                         <img 
                           src={getPartImage(selectedPartType, option.rarity)}
                           alt={`${option.rarity} ${selectedPartType}`}
                           className="w-10 h-10 sm:w-12 sm:h-12 object-contain"
                           referrerPolicy="no-referrer"
                         />
-                      </div>
+                      </a>
                       <div>
                         <div className="flex items-baseline gap-1.5">
                           <span className="text-xl sm:text-2xl font-black text-white">{option.count.toLocaleString()}</span>

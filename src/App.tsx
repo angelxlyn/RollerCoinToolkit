@@ -10,7 +10,9 @@ import {
   Copy,
   Check,
   QrCode,
-  Info
+  Info,
+  Upload,
+  Database
 } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -20,8 +22,12 @@ import EarningsCalculator from './components/EarningsCalculator';
 import PartsCalculator from './components/PartsCalculator';
 import RoomSimulator from './components/RoomSimulator';
 import MinerSearch from './components/MinerSearch';
+import DatabaseManager from './components/DatabaseManager';
+import { Miner } from './types';
+import { fetchMiners, deleteMiner } from './services/apiService';
+import { ASSET_URLS } from './constants';
 
-type Tool = 'home' | 'calculator' | 'parts' | 'simulator' | 'search';
+type Tool = 'home' | 'calculator' | 'parts' | 'simulator' | 'search' | 'database';
 
 const CustomIcon = ({ src, className }: { src: string; className?: string }) => (
   <div 
@@ -45,6 +51,28 @@ export default function App() {
   const [showSupport, setShowSupport] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedQr, setSelectedQr] = useState<any | null>(null);
+  const [editMiner, setEditMiner] = useState<Miner | null>(null);
+
+  const handleEditMiner = (miner: Miner) => {
+    setEditMiner(miner);
+    setActiveTool('database');
+  };
+
+  const handleDeleteMiner = async (id: string) => {
+    try {
+      await deleteMiner(id);
+      // We might need to trigger a refresh in MinerSearch, 
+      // but since it fetches on mount, and we are just deleting,
+      // it might be better to have a state in App or a refresh trigger.
+      // For now, let's just reload the page or rely on the user navigating back.
+      // Actually, MinerSearch should probably handle its own state refresh if possible,
+      // but App is passing the callback.
+      window.location.reload(); // Simple way to refresh for now
+    } catch (error) {
+      console.error('Failed to delete miner:', error);
+      alert('Failed to delete miner. Please try again.');
+    }
+  };
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -60,18 +88,19 @@ export default function App() {
   const donationOptions = [
     { id: 'maya', symbol: 'Maya', name: 'Maya', qr: '/qrs/maya.jpg', icon: '/currencies/maya.webp' },
     { id: 'gcash', symbol: 'GCash', name: 'GCash', qr: '/qrs/gcash.jpg', icon: '/currencies/gcash.webp' },
-    { id: 'btc', symbol: 'BTC', name: 'Bitcoin', value: 'bc1qygj65t5zjn7xttvgs0nkemjyj5hluqug2x8c3x', qr: '/qrs/btc.jpg', icon: '/currencies/btc.svg' },
-    { id: 'eth', symbol: 'ETH', name: 'Ethereum', value: '0x0535Eb9b17cc84cCF1fd6fBAD38ccafd5E789597', qr: '/qrs/eth.jpg', icon: '/currencies/eth.svg' },
-    { id: 'bnb', symbol: 'BNB', name: 'BSC', value: '0x0535Eb9b17cc84cCF1fd6fBAD38ccafd5E789597', qr: '/qrs/bnb.jpg', icon: '/currencies/bnb.svg' },
-    { id: 'sol', symbol: 'SOL', name: 'Solana', value: 'At8TFKEMjzzv5hmDbp2Z7UGEzBpL9F4hyTX8dxuKUZPo', qr: '/qrs/sol.jpg', icon: '/currencies/sol.svg' },
-    { id: 'trx', symbol: 'TRX', name: 'Tron', value: 'TCaxuDwtSHDGmkHL6k4has1LVsFbRAosb3', qr: '/qrs/trx.jpg', icon: '/currencies/trx.svg' },
+    { id: 'btc', symbol: 'BTC', name: 'Bitcoin', value: 'bc1qygj65t5zjn7xttvgs0nkemjyj5hluqug2x8c3x', qr: '/qrs/btc.jpg', icon: ASSET_URLS.currency('btc') },
+    { id: 'eth', symbol: 'ETH', name: 'Ethereum', value: '0x0535Eb9b17cc84cCF1fd6fBAD38ccafd5E789597', qr: '/qrs/eth.jpg', icon: ASSET_URLS.currency('eth') },
+    { id: 'bnb', symbol: 'BNB', name: 'BSC', value: '0x0535Eb9b17cc84cCF1fd6fBAD38ccafd5E789597', qr: '/qrs/bnb.jpg', icon: ASSET_URLS.currency('bnb') },
+    { id: 'sol', symbol: 'SOL', name: 'Solana', value: 'At8TFKEMjzzv5hmDbp2Z7UGEzBpL9F4hyTX8dxuKUZPo', qr: '/qrs/sol.jpg', icon: ASSET_URLS.currency('sol') },
+    { id: 'trx', symbol: 'TRX', name: 'Tron', value: 'TCaxuDwtSHDGmkHL6k4has1LVsFbRAosb3', qr: '/qrs/trx.jpg', icon: ASSET_URLS.currency('trx') },
   ];
 
   const navItems = [
     { id: 'calculator', label: 'Earnings Calc', icon: Calculator },
     { id: 'parts', label: 'Parts & Crafting', icon: (props: any) => <CustomIcon src="/icons/parts.svg" {...props} /> },
     { id: 'simulator', label: 'Room Simulator', icon: LayoutIcon, disabled: true },
-    { id: 'search', label: 'Miner Search', icon: (props: any) => <CustomIcon src="/icons/miners.svg" {...props} />, disabled: true },
+    { id: 'search', label: 'Miner Search', icon: (props: any) => <CustomIcon src="/icons/miners.svg" {...props} /> },
+    { id: 'database', label: 'Database', icon: Database },
   ];
 
   const renderTool = () => {
@@ -80,7 +109,8 @@ export default function App() {
       case 'calculator': return <EarningsCalculator />;
       case 'parts': return <PartsCalculator />;
       case 'simulator': return <RoomSimulator />;
-      case 'search': return <MinerSearch />;
+      case 'search': return <MinerSearch onEdit={handleEditMiner} />;
+      case 'database': return <DatabaseManager editMiner={editMiner} onCancelEdit={() => setEditMiner(null)} />;
       default: return <Dashboard onNavigate={setActiveTool} />;
     }
   };
@@ -111,7 +141,7 @@ export default function App() {
             onClick={() => setActiveTool('home')}
             className="flex items-center gap-0 hover:opacity-80 transition-opacity"
           >
-            <img src="/icons/hamster.png" alt="Logo" className="w-12 h-12 aspect-square object-cover" referrerPolicy="no-referrer" />
+            <img src="/icons/hamster.png" alt="Logo" className="w-11 h-11 aspect-square object-cover" referrerPolicy="no-referrer" />
             <span className="font-bold text-xl tracking-tight text-white">RollerToolkit</span>
           </button>
 
@@ -165,7 +195,7 @@ export default function App() {
               }}
               className="flex items-center gap-0 mb-4 px-1 hover:opacity-80 transition-opacity w-full text-left"
             >
-              <img src="/icons/hamster.png" alt="Logo" className="w-12 h-12 aspect-square object-cover" referrerPolicy="no-referrer" />
+              <img src="/icons/hamster.png" alt="Logo" className="w-11 h-11 aspect-square object-cover" referrerPolicy="no-referrer" />
               <span className="font-bold text-xl tracking-tight text-white">
                 RollerToolkit
               </span>
@@ -323,7 +353,16 @@ export default function App() {
                       <div className="relative shrink-0">
                         {opt.icon ? (
                           <div className="w-11 h-11 rounded-full bg-slate-800 flex items-center justify-center overflow-hidden border border-white/5">
-                            <img src={opt.icon} alt={opt.symbol} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            <img 
+                              src={opt.icon} 
+                              alt={opt.symbol} 
+                              className="w-full h-full object-cover" 
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = 'none';
+                                (e.target as HTMLImageElement).parentElement!.innerHTML = `<div class="w-full h-full flex items-center justify-center text-white font-bold text-xs bg-emerald-500">${opt.symbol[0]}</div>`;
+                              }}
+                            />
                           </div>
                         ) : (
                           <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-xs border border-white/10 shadow-inner bg-emerald-500">

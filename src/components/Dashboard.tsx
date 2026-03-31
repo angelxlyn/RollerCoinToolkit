@@ -205,8 +205,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       description: 'Identify miners from images and search by visual characteristics.',
       icon: (props: any) => <CustomIcon src="/icons/miners.svg" {...props} />,
       color: 'from-orange-500 to-red-500',
-      delay: 0.4,
-      disabled: true
+      delay: 0.4
     }
   ];
 
@@ -306,9 +305,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                     </div>
                     <div className="flex flex-col">
                       <h3 className="text-lg font-bold text-white leading-tight">{feature.title}</h3>
-                      {feature.disabled && (
-                        <span className="text-[10px] font-black text-emerald-500/60 uppercase tracking-widest mt-0.5">Coming Soon</span>
-                      )}
                     </div>
                   </div>
                   <p className="text-slate-400 text-sm leading-relaxed flex-1">{feature.description}</p>

@@ -4,7 +4,8 @@ export enum Rarity {
   RARE = 'Rare',
   EPIC = 'Epic',
   LEGENDARY = 'Legendary',
-  UNREAL = 'Unreal'
+  UNREAL = 'Unreal',
+  LEGACY = 'Legacy'
 }
 
 export interface Part {
@@ -29,6 +30,11 @@ export interface Miner {
   tags: string[];
   rarities: Partial<Record<Rarity, MinerRarity>>;
   defaultRarity: Rarity;
+  setId?: string;
+  sellable?: boolean;
+  marketUrl?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Rack {
@@ -37,6 +43,20 @@ export interface Rack {
   slots: number;
   bonus: number; // percentage
   image?: string;
+  setId?: string;
+  marketUrl?: string;
+}
+
+export interface CollectionSet {
+  id: string;
+  name: string;
+  levels: {
+    level: number;
+    count: number; // Number of miners from this set in the rack
+    power?: number; // Gh/s bonus
+    bonus?: number; // percentage bonus
+  }[];
+  updatedAt?: string;
 }
 
 export enum CurrencyType {
@@ -68,4 +88,12 @@ export enum PartType {
   FAN = 'Fan',
   HASHBOARD = 'Hashboard',
   WIRE = 'Wire'
+}
+
+export interface GlobalSettings {
+  blockTimes: Record<string, Record<string, number>>;
+  blockRewards: Record<string, Record<string, number>>;
+  updatedAt: string;
+  rewardsUpdatedAt?: string;
+  timesUpdatedAt?: string;
 }

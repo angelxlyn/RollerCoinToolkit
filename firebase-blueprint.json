@@ -1,0 +1,28 @@
+{
+  "entities": {
+    "Miner": {
+      "title": "Miner",
+      "description": "A mining machine in the RollerToolkit.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the miner." },
+        "name": { "type": "string", "description": "Name of the miner." },
+        "description": { "type": "string", "description": "Description of the miner." },
+        "cells": { "type": "integer", "description": "Number of cells the miner occupies." },
+        "image": { "type": "string", "description": "URL or base64 data of the miner image." },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for categorization." },
+        "rarities": { "type": "object", "description": "Map of rarities to their stats." },
+        "defaultRarity": { "type": "string", "description": "The default rarity for this miner." },
+        "authorId": { "type": "string", "description": "The UID of the user who uploaded the miner." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the miner was uploaded." }
+      },
+      "required": ["id", "name", "cells", "rarities", "defaultRarity", "authorId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/miners/{minerId}": {
+      "schema": "Miner",
+      "description": "Collection of miners uploaded by users."
+    }
+  }
+}

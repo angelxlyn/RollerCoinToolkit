@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Miner, Rack, Rarity } from '../types';
 import { MINERS_DB, RACKS } from '../constants';
+import MinerImage from './MinerImage';
 import { Layout as LayoutIcon, Plus, Trash2, Zap, Shield, Info, Layers, Search, Filter, ArrowUpDown, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -258,12 +259,13 @@ export default function RoomSimulator() {
 
                         {/* Rack Image from RC */}
                         {rackDef.image && (
-                          <img 
-                            src={rackDef.image} 
+                          <MinerImage 
+                            image={rackDef.image} 
+                            name={rackDef.name}
+                            baseUrl="racks"
+                            extension=".png"
                             className="absolute inset-0 w-full h-full object-contain pointer-events-none z-0" 
-                            alt=""
-                            referrerPolicy="no-referrer"
-                            onError={(e) => (e.currentTarget.style.display = 'none')}
+                            fallbackClassName="absolute inset-0 w-full h-full"
                           />
                         )}
 
@@ -282,10 +284,11 @@ export default function RoomSimulator() {
                                   return (
                                     <div key={pm.id} className="relative group/miner-placed">
                                       <RarityBadge rarity={pm.rarity} />
-                                      <img 
-                                        src={minerDef?.image} 
+                                      <MinerImage 
+                                        image={minerDef?.image} 
+                                        name={minerDef?.name || ''}
                                         className="h-8 md:h-10 object-contain drop-shadow-md" 
-                                        alt={minerDef?.name} 
+                                        fallbackClassName="h-8 md:h-10"
                                       />
                                       <button 
                                         onClick={(e) => {
@@ -410,7 +413,12 @@ export default function RoomSimulator() {
                                           .map(m => (
                                           <div key={m.id} className="bg-[#1a1a24] border border-slate-800 rounded-lg overflow-hidden flex flex-col group/miner-card hover:border-emerald-500/50 transition-all">
                                             <div className="relative aspect-[4/3] bg-[#0f0f14] flex items-center justify-center p-2">
-                                              <img src={m.image} className="h-10 object-contain group-hover/miner-card:scale-110 transition-transform" alt="" />
+                                              <MinerImage 
+                                                image={m.image} 
+                                                name={m.name}
+                                                className="h-10 object-contain group-hover/miner-card:scale-110 transition-transform" 
+                                                fallbackClassName="h-10"
+                                              />
                                               <div className="absolute top-1 right-1 bg-slate-800/80 px-1 rounded text-[8px] text-white font-bold">1</div>
                                               <div className="absolute top-1 left-1 bg-emerald-500 px-1 rounded text-[8px] text-white font-bold">I</div>
                                             </div>
@@ -649,7 +657,12 @@ export default function RoomSimulator() {
                       .map(m => (
                       <div key={m.id} className="bg-[#1a1a24] border border-slate-800 rounded-lg overflow-hidden flex flex-col group/miner-card hover:border-emerald-500/50 transition-all">
                         <div className="relative aspect-[4/3] bg-[#0f0f14] flex items-center justify-center p-2">
-                          <img src={m.image} className="h-12 object-contain group-hover/miner-card:scale-110 transition-transform" alt="" />
+                          <MinerImage 
+                            image={m.image} 
+                            name={m.name}
+                            className="h-12 object-contain group-hover/miner-card:scale-110 transition-transform" 
+                            fallbackClassName="h-12"
+                          />
                           <div className="absolute top-1 right-1 bg-slate-800/80 px-1 rounded text-[8px] text-white font-bold">1</div>
                           <div className="absolute top-1 left-1 bg-emerald-500 px-1 rounded text-[8px] text-white font-bold">I</div>
                         </div>
