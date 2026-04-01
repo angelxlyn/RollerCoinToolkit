@@ -768,24 +768,94 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
   };
 
 
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const runDiagnostics = async () => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      const res = await fetch(`${window.location.origin}/api/debug-supabase`);
+      const data = await res.json();
+      setDebugInfo(data);
+      setShowDebug(true);
+      
+      if (data.fetchError) {
+        setAuthError(`DNS/Network Error: The server cannot reach ${data.url}. Please verify your Supabase project ID.`);
+      } else if (data.dbTest?.error) {
+        setAuthError(`Database Error: ${data.dbTest.error.message || 'Could not query database'}`);
+      } else {
+        setAuthError('Connection test successful! If you still see "Failed to fetch" in the browser, it may be a local network/firewall issue.');
+      }
+    } catch (err: any) {
+      setAuthError(`Diagnostic failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setAuthError(null);
     try {
       console.log('Attempting login for:', email);
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) {
-        console.error('Supabase Auth error:', error);
-        throw error;
+      
+      // Try direct login first
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        console.log('Direct login successful:', data.user?.id);
+        return;
+      } catch (directError: any) {
+        console.warn('Direct login failed:', directError);
+        
+        // If it's a network error, try the proxy
+        const isNetworkError = directError.message === 'Failed to fetch' || 
+                              directError.name === 'TypeError' || 
+                              directError.message?.includes('fetch');
+                              
+        if (isNetworkError) {
+          console.warn('Direct login failed with network error, trying server-side proxy...');
+          const proxyRes = await fetch(`${window.location.origin}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+          });
+          
+          if (!proxyRes.ok) {
+            const errorData = await proxyRes.json();
+            console.error('Proxy login failed:', errorData);
+            throw new Error(errorData.error || 'Authentication failed via proxy');
+          }
+          
+          const proxyData = await proxyRes.json();
+          console.log('Proxy login successful:', proxyData.user?.id);
+          
+          // Set the session manually on the client
+          const { error: sessionError } = await supabase.auth.setSession(proxyData.session);
+          if (sessionError) throw sessionError;
+          return;
+        } else {
+          throw directError;
+        }
       }
-      console.log('Login successful:', data.user?.id);
     } catch (err: any) {
-      console.error('Auth error:', err);
-      setAuthError(err.message || 'An unexpected error occurred');
+      console.error('Auth error caught:', err);
+      let errorMessage = err.message || 'An unexpected error occurred';
+      
+      if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+        errorMessage = 'DNS Error: The server cannot find your Supabase project. Please check if your project ID is correct and the project is active.';
+      } else if (errorMessage === 'Failed to fetch' || errorMessage === 'fetch failed') {
+        errorMessage = 'Connection Error: Failed to reach Supabase. This usually means the URL is wrong or the project is paused.';
+      }
+      
+      setAuthError(errorMessage);
+      // Auto-run diagnostics on failure
+      runDiagnostics();
     } finally {
       setLoading(false);
     }
@@ -994,9 +1064,37 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
               />
             </div>
             {authError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-red-400 text-sm">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl space-y-2 text-red-400 text-sm">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <p className="font-bold">Authentication Error</p>
+                </div>
                 <p>{authError}</p>
+                <button 
+                  type="button"
+                  onClick={runDiagnostics}
+                  className="text-xs underline hover:text-red-300 transition-colors"
+                >
+                  Run Connection Diagnostics
+                </button>
+              </div>
+            )}
+
+            {showDebug && debugInfo && (
+              <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl text-blue-400 text-xs space-y-2">
+                <div className="flex justify-between items-center">
+                  <p className="font-bold uppercase tracking-wider opacity-70">Diagnostic Report</p>
+                  <button onClick={() => setShowDebug(false)} className="hover:text-white transition-colors">✕</button>
+                </div>
+                <div className="bg-slate-900/50 p-2 rounded border border-blue-500/10 overflow-auto max-h-40 font-mono">
+                  <pre>{JSON.stringify(debugInfo, null, 2)}</pre>
+                </div>
+                {debugInfo.fetchError && (
+                  <div className="p-2 bg-red-500/20 border border-red-500/30 rounded text-red-300">
+                    <p className="font-bold">⚠️ DNS/Network Error Detected</p>
+                    <p>The server cannot resolve the Supabase hostname. Please verify your project ID in the Secrets panel.</p>
+                  </div>
+                )}
               </div>
             )}
             <button 
@@ -1007,6 +1105,17 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogIn className="w-5 h-5" />}
               Sign In
             </button>
+            
+            {!authError && !showDebug && (
+              <button
+                type="button"
+                onClick={runDiagnostics}
+                className="w-full py-2 text-slate-500 hover:text-slate-300 text-xs transition-colors flex items-center justify-center gap-1"
+              >
+                <AlertCircle className="w-3 h-3" />
+                Troubleshoot Connection
+              </button>
+            )}
           </form>
         </motion.div>
       </div>

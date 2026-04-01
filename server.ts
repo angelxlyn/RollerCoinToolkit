@@ -29,27 +29,148 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Debug endpoint for environment variables
+app.get('/api/debug-env', (req, res) => {
+  const envs = {
+    VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL ? `${process.env.VITE_SUPABASE_URL.substring(0, 15)}...` : 'MISSING',
+    SUPABASE_URL: process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.substring(0, 15)}...` : 'MISSING',
+    VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY ? 'PRESENT (length: ' + process.env.VITE_SUPABASE_ANON_KEY.length + ')' : 'MISSING',
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ? 'PRESENT (length: ' + process.env.SUPABASE_ANON_KEY.length + ')' : 'MISSING',
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'PRESENT (length: ' + process.env.SUPABASE_SERVICE_ROLE_KEY.length + ')' : 'MISSING',
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: process.env.PORT
+  };
+  res.json(envs);
+});
+
 // Logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   next();
 });
 
+// Helper to normalize Supabase URL
+const normalizeUrl = (url: string) => {
+  if (!url) return "";
+  let normalized = url.trim();
+  
+  // If it's just the project ID (e.g. 20 chars, no dots, no slashes)
+  if (normalized.length === 20 && !normalized.includes('.') && !normalized.includes('/')) {
+    normalized = `${normalized}.supabase.co`;
+  }
+  
+  if (!normalized.startsWith('http')) {
+    normalized = `https://${normalized}`;
+  }
+  // Remove trailing slash
+  return normalized.replace(/\/$/, "");
+};
+
 // Supabase Setup
-const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+const rawUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+const supabaseUrl = normalizeUrl(rawUrl);
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+
+console.log('Server Supabase Config:', {
+  rawUrl: rawUrl ? `${rawUrl.substring(0, 10)}...` : 'MISSING',
+  normalizedUrl: supabaseUrl,
+  hasServiceKey: !!supabaseServiceKey,
+  hasAnonKey: !!supabaseAnonKey
+});
 
 let supabaseClient: any = null;
+let supabaseAnonClient: any = null;
 
 function getSupabase() {
   if (!supabaseClient) {
     if (!supabaseUrl || !supabaseServiceKey) {
+      console.error("Supabase URL or Service Key not found in environment variables.");
       throw new Error("Supabase URL or Service Key not found in environment variables. Please configure them in the AI Studio Secrets panel.");
     }
     supabaseClient = createClient(supabaseUrl, supabaseServiceKey);
   }
   return supabaseClient;
 }
+
+function getAnonSupabase() {
+  if (!supabaseAnonClient) {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error("Supabase URL or Anon Key not found in environment variables.");
+      throw new Error("Supabase URL or Anon Key not found in environment variables.");
+    }
+    supabaseAnonClient = createClient(supabaseUrl, supabaseAnonKey);
+  }
+  return supabaseAnonClient;
+}
+
+// Auth Proxy to bypass browser-side network blocks
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const client = getAnonSupabase();
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    res.json(data);
+  } catch (err: any) {
+    console.error('Server-side Auth Error:', err);
+    res.status(err.status || 400).json({ error: err.message || 'Authentication failed' });
+  }
+});
+
+// Diagnostic endpoint to test Supabase connectivity
+app.get('/api/debug-supabase', async (req, res) => {
+  const results: any = {
+    url: supabaseUrl,
+    hasAnonKey: !!supabaseAnonKey,
+    hasServiceKey: !!supabaseServiceKey,
+    timestamp: new Date().toISOString()
+  };
+
+  try {
+    console.log(`[DEBUG] Attempting to fetch Supabase URL: ${supabaseUrl}`);
+    const start = Date.now();
+    const response = await fetch(supabaseUrl, { method: 'GET' });
+    results.fetchStatus = response.status;
+    results.fetchStatusText = response.statusText;
+    results.fetchTime = Date.now() - start;
+    
+    const text = await response.text();
+    results.fetchBodySnippet = text.substring(0, 100);
+  } catch (err: any) {
+    console.error('[DEBUG] Supabase fetch failed:', err);
+    results.fetchError = {
+      message: err.message,
+      name: err.name,
+      code: err.code,
+      stack: err.stack,
+      cause: err.cause
+    };
+    
+    // Add specific DNS troubleshooting
+    if (err.code === 'ENOTFOUND') {
+      results.dnsTroubleshooting = {
+        issue: "DNS Resolution Failed",
+        possibleCauses: [
+          "The project ID in the URL is incorrect.",
+          "The Supabase project has been deleted or paused.",
+          "The server environment has DNS resolution restrictions."
+        ],
+        recommendation: "Verify your VITE_SUPABASE_URL in the Secrets panel. It should be in the format: https://[project-id].supabase.co"
+      };
+    }
+  }
+
+  try {
+    const client = getAnonSupabase();
+    const { data, error } = await client.from('miners').select('count', { count: 'exact', head: true });
+    results.dbTest = error ? { error } : { success: true, count: data };
+  } catch (err: any) {
+    results.dbTest = { error: err.message };
+  }
+
+  res.json(results);
+});
 
 async function checkSupabaseConnection() {
   try {
@@ -669,8 +790,7 @@ async function updateGoogleSheetRow(type: string, item: any, isDeletion: boolean
 
 app.post('/api/miners', async (req, res) => {
   try {
-    const newMiner = req.body;
-    const { _id, ...minerData } = newMiner; // Remove _id if it exists to avoid conflict
+    const minerData = req.body;
     
     const { error } = await getSupabase().from('miners').upsert({
       ...minerData,
@@ -710,8 +830,7 @@ app.delete('/api/miners/:id', async (req, res) => {
 
 app.post('/api/racks', async (req, res) => {
   try {
-    const rackData = req.body;
-    const { _id, ...data } = rackData;
+    const data = req.body;
     
     const { error } = await getSupabase().from('racks').upsert({
       ...data,
@@ -751,8 +870,7 @@ app.delete('/api/racks/:id', async (req, res) => {
 
 app.post('/api/sets', async (req, res) => {
   try {
-    const setData = req.body;
-    const { _id, ...data } = setData;
+    const data = req.body;
     
     const { error } = await getSupabase().from('sets').upsert({
       ...data,
@@ -848,8 +966,6 @@ app.post('/api/miners/bulk', upload.single('file'), async (req, res) => {
           setId: raw.Set || raw.setId || undefined,
           updatedAt: new Date().toISOString()
         };
-        
-        if ((minerData as any)._id) delete (minerData as any)._id;
 
         return minerData;
       } catch (err: any) {
@@ -908,8 +1024,6 @@ app.post('/api/racks/bulk', upload.single('file'), async (req, res) => {
           setId: raw.Set || raw.setId || undefined,
           updatedAt: new Date().toISOString()
         };
-        
-        if ((rackData as any)._id) delete (rackData as any)._id;
 
         return rackData;
       } catch (err: any) {
@@ -957,8 +1071,7 @@ app.get('/api/settings', async (req, res) => {
 
 app.post('/api/settings', async (req, res) => {
   try {
-    const settings = req.body;
-    const { _id, ...settingsData } = settings;
+    const settingsData = req.body;
     
     const { error } = await getSupabase().from('settings').upsert({
       ...settingsData,
