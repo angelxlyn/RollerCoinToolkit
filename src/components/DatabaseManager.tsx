@@ -67,12 +67,9 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
   const [minerImage, setMinerImage] = useState('');
   const [minerTags, setMinerTags] = useState<string[]>([]);
   const [currentTag, setCurrentTag] = useState('');
-  const [rarities, setRarities] = useState<Partial<Record<Rarity, FormMinerRarity>>>({
-    [Rarity.COMMON]: { power: 0, bonus: 0 }
-  });
+  const [rarities, setRarities] = useState<Partial<Record<Rarity, MinerRarity>>>({});
   const [minerSetId, setMinerSetId] = useState<string>('');
   const [minerSellable, setMinerSellable] = useState<boolean>(true);
-  const [minerMarketUrl, setMinerMarketUrl] = useState('');
 
   // Rack Form State
   const [racks, setRacks] = useState<any[]>([]);
@@ -213,7 +210,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
           bonus: rackBonus,
           image: ensureFullUrl(rackImage, 'racks', '.png'),
           setId: rackSetId || undefined,
-          marketUrl: ensureFullUrl(rackMarketUrl, RACK_MARKET_BASE_URL)
+          marketUrl: rackMarketUrl ? ensureFullUrl(rackMarketUrl, RACK_MARKET_BASE_URL) : undefined
         })
       });
       if (res.ok) {
@@ -698,20 +695,9 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
       setMinerCells(editMiner.cells);
       setMinerImage(editMiner.image || '');
       setMinerTags(editMiner.tags);
-      
-      // Normalize rarities keys (handle uppercase from database)
-      const normalizedRarities: Partial<Record<Rarity, FormMinerRarity>> = {};
-      Object.entries(editMiner.rarities).forEach(([key, value]) => {
-        const normalizedKey = RARITY_ORDER.find(r => r.toLowerCase() === key.toLowerCase()) as Rarity;
-        if (normalizedKey) {
-          normalizedRarities[normalizedKey] = value;
-        }
-      });
-      setRarities(normalizedRarities);
-      
+      setRarities(editMiner.rarities || {});
       setMinerSetId(editMiner.setId || '');
       setMinerSellable(editMiner.sellable !== false);
-      setMinerMarketUrl(editMiner.marketUrl || '');
     } else {
       // Reset form if not editing
       setMinerName('');
@@ -720,10 +706,9 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
       setMinerImage('');
       setMinerTags([]);
       setCurrentTag('');
-      setRarities({ [Rarity.COMMON]: { power: 0, bonus: 0 } });
+      setRarities({ [Rarity.COMMON]: { power: 0, bonus: 0, marketUrl: '' } });
       setMinerSetId('');
       setMinerSellable(true);
-      setMinerMarketUrl('');
     }
   }, [editMiner]);
 
@@ -820,16 +805,23 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                               
         if (isNetworkError) {
           console.warn('Direct login failed with network error, trying server-side proxy...');
-          const proxyRes = await fetch(`${window.location.origin}/api/auth/login`, {
+          const proxyRes = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
           });
           
+          const contentType = proxyRes.headers.get('content-type');
           if (!proxyRes.ok) {
-            const errorData = await proxyRes.json();
-            console.error('Proxy login failed:', errorData);
-            throw new Error(errorData.error || 'Authentication failed via proxy');
+            if (contentType && contentType.includes('application/json')) {
+              const errorData = await proxyRes.json();
+              console.error('Proxy login failed (JSON):', errorData);
+              throw new Error(errorData.error || 'Authentication failed via proxy');
+            } else {
+              const text = await proxyRes.text();
+              console.error('Proxy login failed (Non-JSON):', text.substring(0, 200));
+              throw new Error(`Server error (${proxyRes.status}): The authentication service returned an invalid response. This often happens if the API route is missing or the server is misconfigured.`);
+            }
           }
           
           const proxyData = await proxyRes.json();
@@ -921,28 +913,27 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
     setMinerTags(minerTags.filter(t => t !== tag));
   };
 
-  const updateRarity = (rarity: Rarity, field: keyof FormMinerRarity, value: any) => {
-    setRarities({
-      ...rarities,
+  const updateRarity = (rarity: Rarity, field: keyof MinerRarity, value: string) => {
+    setRarities(prev => ({
+      ...prev,
       [rarity]: {
-        ...(rarities[rarity] || { power: 0, bonus: 0 }),
-        [field]: value
+        ...(prev[rarity] || { power: 0, bonus: 0, marketUrl: '' }),
+        [field]: field === 'marketUrl' ? value : parseFloat(value) || 0
       }
-    });
+    }));
   };
 
   const toggleRarity = (rarity: Rarity) => {
-    if (rarities[rarity]) {
-      if (rarity === Rarity.COMMON) return; // Common is required
-      const newRarities = { ...rarities };
-      delete newRarities[rarity];
-      setRarities(newRarities);
-    } else {
-      setRarities({
-        ...rarities,
-        [rarity]: { power: 0, bonus: 0 }
-      });
-    }
+    setRarities(prev => {
+      const newRarities = { ...prev };
+      if (newRarities[rarity]) {
+        if (rarity === Rarity.COMMON) return prev; // Common is required
+        delete newRarities[rarity];
+      } else {
+        newRarities[rarity] = { power: 0, bonus: 0, marketUrl: '' };
+      }
+      return newRarities;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -964,16 +955,17 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
         finalImageUrl = ensureFullUrl(finalImageUrl, 'miners', '.gif');
       }
 
-      // Process rarities to ensure they are numbers
+      // Process rarities to ensure they are numbers and in correct order
       const processedRarities: Partial<Record<Rarity, MinerRarity>> = {};
-      Object.keys(rarities).forEach(key => {
-        const r = key as Rarity;
-        processedRarities[r] = {
-          ...rarities[r]!,
-          power: parseFloat(String(rarities[r]?.power || 0)),
-          bonus: parseFloat(String(rarities[r]?.bonus || 0)),
-          marketUrl: ensureFullUrl(rarities[r]?.marketUrl || '', MARKET_BASE_URL)
-        };
+      RARITY_ORDER.forEach(rarity => {
+        const stats = rarities[rarity];
+        if (stats) {
+          processedRarities[rarity] = {
+            power: parseFloat(String(stats.power || 0)),
+            bonus: parseFloat(String(stats.bonus || 0)),
+            marketUrl: stats.marketUrl ? ensureFullUrl(stats.marketUrl, MARKET_BASE_URL) : undefined
+          };
+        }
       });
 
       const minerData: Miner = {
@@ -983,11 +975,10 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
         cells: minerCells,
         image: finalImageUrl,
         tags: minerTags,
-        rarities: processedRarities as Record<Rarity, MinerRarity>,
+        rarities: processedRarities,
         defaultRarity: Rarity.COMMON,
         setId: minerSetId || undefined,
         sellable: minerSellable,
-        marketUrl: ensureFullUrl(minerMarketUrl, MARKET_BASE_URL),
         updatedAt: new Date().toISOString()
       };
 
@@ -1005,7 +996,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
         setMinerCells(1);
         setMinerImage('');
         setMinerTags([]);
-        setRarities({ [Rarity.COMMON]: { power: 0, bonus: 0 } });
+        setRarities({ [Rarity.COMMON]: { power: 0, bonus: 0, marketUrl: '' } });
       }
     } catch (err: any) {
       setUploadError(err.message);
@@ -1567,7 +1558,8 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                 
                 <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full">
                   {RARITY_ORDER.map(r => {
-                    const isEnabled = !!rarities[r];
+                    const stats = rarities[r];
+                    const isEnabled = !!stats;
                     return (
                       <div 
                         key={r}
@@ -1601,7 +1593,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Power (Gh/s)</label>
                               <input 
                                 type="text" 
-                                value={rarities[r]?.power ?? ''}
+                                value={stats.power ?? ''}
                                 onChange={(e) => {
                                   const val = e.target.value;
                                   if (val === '' || /^\d*\.?\d*$/.test(val)) {
@@ -1615,7 +1607,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Bonus (%)</label>
                               <input 
                                 type="text" 
-                                value={rarities[r]?.bonus ?? ''}
+                                value={stats.bonus ?? ''}
                                 onChange={(e) => {
                                   const val = e.target.value;
                                   if (val === '' || /^\d*\.?\d*$/.test(val)) {
@@ -1629,7 +1621,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Market ID / URL (Optional)</label>
                               <input 
                                 type="text" 
-                                value={rarities[r]?.marketUrl || ''}
+                                value={stats.marketUrl || ''}
                                 onChange={(e) => updateRarity(r, 'marketUrl', e.target.value)}
                                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500"
                                 placeholder="e.g., 64f0a... (or full URL)"
@@ -1695,7 +1687,6 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                         setRarities({ [Rarity.COMMON]: { power: 0, bonus: 0 } });
                         setMinerSetId('');
                         setMinerSellable(true);
-                        setMinerMarketUrl('');
                       }}
                       className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-2xl font-bold border border-slate-700 transition-all flex items-center justify-center gap-3"
                     >

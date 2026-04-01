@@ -32,7 +32,6 @@ export interface Miner {
   defaultRarity: Rarity;
   setId?: string;
   sellable?: boolean;
-  marketUrl?: string;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -107,14 +107,24 @@ function getAnonSupabase() {
 // Auth Proxy to bypass browser-side network blocks
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
+  console.log(`[AUTH] Proxy login attempt for: ${email}`);
+  
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
   try {
     const client = getAnonSupabase();
     const { data, error } = await client.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    if (error) {
+      console.error('[AUTH] Supabase Auth Error:', error);
+      return res.status(error.status || 400).json({ error: error.message || 'Authentication failed' });
+    }
+    console.log(`[AUTH] Proxy login success for: ${email}`);
     res.json(data);
   } catch (err: any) {
-    console.error('Server-side Auth Error:', err);
-    res.status(err.status || 400).json({ error: err.message || 'Authentication failed' });
+    console.error('[AUTH] Server-side Auth Exception:', err);
+    res.status(500).json({ error: err.message || 'Internal server error during authentication' });
   }
 });
 
@@ -262,7 +272,7 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
         try {
           const name = raw.Miner || raw.name || raw.Name || raw["Miner Name"] || raw["Miner name"] || raw.Miners;
           if (!name) {
-            console.warn(`[SYNC] Skipping row: No miner name found in columns: ${Object.keys(raw).join(', ')}`);
+            console.warn(`[SYNC] Skipping row: No miner name found. Available columns: ${Object.keys(raw).join(', ')}`);
             return null;
           }
           const id = name.toLowerCase().replace(/'/g, '').replace(/\./g, '').replace(/-/g, '_').replace(/\s+/g, '_');
@@ -275,15 +285,20 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
             const bonusKey = `${r} Bonus`;
             const marketKey = `${r} Market ID`;
             
-            if (raw[powerKey] !== undefined || raw[bonusKey] !== undefined) {
-              // Handle commas in numbers
-              const powerVal = String(raw[powerKey] || 0).replace(/,/g, '');
-              const bonusVal = String(raw[bonusKey] || 0).replace(/,/g, '').replace(/%/g, '');
-              
+            // Handle commas in numbers
+            const powerVal = raw[powerKey] !== undefined ? String(raw[powerKey]).replace(/,/g, '') : '0';
+            const bonusVal = raw[bonusKey] !== undefined ? String(raw[bonusKey]).replace(/,/g, '').replace(/%/g, '') : '0';
+            
+            const power = parseFloat(powerVal) || 0;
+            const bonus = parseFloat(bonusVal) || 0;
+            const marketUrl = raw[marketKey] ? ensureFullUrl(raw[marketKey], MARKET_BASE_URL) : undefined;
+
+            // Include rarity if it has data or if it's one of the standard ones the user expects
+            if (power > 0 || bonus > 0 || marketUrl || r === 'Common' || r === 'Legacy') {
               rarities[r] = {
-                power: parseFloat(powerVal),
-                bonus: parseFloat(bonusVal),
-                marketUrl: ensureFullUrl(raw[marketKey], MARKET_BASE_URL)
+                power,
+                bonus,
+                ...(marketUrl ? { marketUrl } : {})
               };
             }
           });
@@ -291,11 +306,11 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
           // Handle Set ID mapping and normalization
           const rawSetId = raw.Set || raw.setId || raw.collectionSet || raw["Part of a Set?"] || raw["isPartOfSet"] || raw["Set ID"] || raw["set_id"] || '';
           let setId = undefined;
-          if (rawSetId && !['true', 'yes', '1', 'y', 'false', 'no', '0', 'n'].includes(String(rawSetId).toLowerCase())) {
+          if (rawSetId && !['true', 'yes', '1', 'y', 'false', 'no', '0', 'n', 'none', 'null'].includes(String(rawSetId).toLowerCase())) {
             setId = String(rawSetId).toLowerCase().replace(/'/g, '').replace(/\./g, '').replace(/-/g, '_').replace(/\s+/g, '_');
           }
 
-          const minerData = {
+          const minerData: any = {
             id,
             name,
             image: ensureFullUrl(raw["Image ID"] || raw.image, MINER_ASSET_BASE_URL, '.gif'),
@@ -303,9 +318,8 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
             description: raw.Description || raw.description || '',
             tags: raw.Tags ? String(raw.Tags).split(',').map((t: string) => t.trim()) : [],
             rarities,
-            sellable: String(raw.Sellable || raw.sellable).toLowerCase() === 'true',
+            sellable: String(raw.Sellable || raw.sellable || 'true').toLowerCase() === 'true',
             setId,
-            marketUrl: ensureFullUrl(raw["Market ID"] || raw.marketUrl, MARKET_BASE_URL),
             updatedAt: new Date().toISOString()
           };
 
@@ -317,9 +331,16 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
       }).filter(op => op !== null);
 
       if (upsertData.length > 0) {
-        console.log(`[SYNC] Executing upsert for ${upsertData.length} miners...`);
-        const { error: upsertError } = await supabase.from('miners').upsert(upsertData);
-        if (upsertError) throw upsertError;
+        console.log(`[SYNC] Executing upsert for ${upsertData.length} miners in chunks...`);
+        
+        // Chunk upsert to avoid payload size limits
+        const chunkSize = 500;
+        for (let i = 0; i < upsertData.length; i += chunkSize) {
+          const chunk = upsertData.slice(i, i + chunkSize);
+          const { error: upsertError } = await supabase.from('miners').upsert(chunk);
+          if (upsertError) throw upsertError;
+          console.log(`[SYNC] Upserted chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(upsertData.length / chunkSize)}`);
+        }
         
         const { count: totalMiners } = await supabase.from('miners').select('*', { count: 'exact', head: true });
         console.log(`[SYNC] Successfully synced miners. Total in DB: ${totalMiners}`);
@@ -340,7 +361,7 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
         try {
           const name = raw.Rack || raw.name || raw.Name || raw["Rack Name"] || raw["Rack name"] || raw.Racks;
           if (!name) {
-            console.warn(`[SYNC] Skipping row: No rack name found in columns: ${Object.keys(raw).join(', ')}`);
+            console.warn(`[SYNC] Skipping row: No rack name found. Available columns: ${Object.keys(raw).join(', ')}`);
             return null;
           }
           const id = name.toLowerCase().replace(/'/g, '').replace(/\./g, '').replace(/-/g, '_').replace(/\s+/g, '_');
@@ -348,23 +369,25 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
           // Handle Set ID mapping and normalization
           const rawSetId = raw.Set || raw.setId || raw.collectionSet || raw["Part of a Set?"] || raw["isPartOfSet"] || raw["Set ID"] || raw["set_id"] || '';
           let setId = undefined;
-          if (rawSetId && !['true', 'yes', '1', 'y', 'false', 'no', '0', 'n'].includes(String(rawSetId).toLowerCase())) {
+          if (rawSetId && !['true', 'yes', '1', 'y', 'false', 'no', '0', 'n', 'none', 'null'].includes(String(rawSetId).toLowerCase())) {
             setId = String(rawSetId).toLowerCase().replace(/'/g, '').replace(/\./g, '').replace(/-/g, '_').replace(/\s+/g, '_');
           }
 
           // Use "ID" column if available, otherwise fallback to name-based id
           const rackId = raw.ID || raw.id || raw["Rack ID"] || id;
 
-          const rackData = {
+          const rackData: any = {
             id,
             name,
             slots: parseInt(String(raw.Slots || raw.slots || 8).replace(/,/g, '')),
             bonus: parseFloat(String(raw.Bonus || raw.bonus || 0).replace(/,/g, '').replace(/%/g, '')),
-            image: ensureFullUrl(rackId, RACK_ASSET_BASE_URL, '.png'),
-            marketUrl: ensureFullUrl(rackId, RACK_MARKET_BASE_URL),
+            image: ensureFullUrl(raw.image || rackId, RACK_ASSET_BASE_URL, '.png'),
             setId,
             updatedAt: new Date().toISOString()
           };
+
+          const rackMarketId = raw["Market ID"] || raw.marketUrl || raw.marketID || rackId;
+          rackData.marketUrl = ensureFullUrl(rackMarketId, RACK_MARKET_BASE_URL);
 
           return rackData;
         } catch (err: any) {
@@ -374,9 +397,16 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
       }).filter(op => op !== null);
 
       if (upsertData.length > 0) {
-        console.log(`[SYNC] Executing upsert for ${upsertData.length} racks...`);
-        const { error: upsertError } = await supabase.from('racks').upsert(upsertData);
-        if (upsertError) throw upsertError;
+        console.log(`[SYNC] Executing upsert for ${upsertData.length} racks in chunks...`);
+        
+        // Chunk upsert to avoid payload size limits
+        const chunkSize = 500;
+        for (let i = 0; i < upsertData.length; i += chunkSize) {
+          const chunk = upsertData.slice(i, i + chunkSize);
+          const { error: upsertError } = await supabase.from('racks').upsert(chunk);
+          if (upsertError) throw upsertError;
+          console.log(`[SYNC] Upserted chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(upsertData.length / chunkSize)}`);
+        }
         
         const { count: totalRacks } = await supabase.from('racks').select('*', { count: 'exact', head: true });
         console.log(`[SYNC] Successfully synced racks. Total in DB: ${totalRacks}`);
@@ -433,9 +463,16 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
       });
 
       if (upsertData.length > 0) {
-        console.log(`[SYNC] Executing upsert for ${upsertData.length} sets...`);
-        const { error: upsertError } = await supabase.from('sets').upsert(upsertData);
-        if (upsertError) throw upsertError;
+        console.log(`[SYNC] Executing upsert for ${upsertData.length} sets in chunks...`);
+        
+        // Chunk upsert to avoid payload size limits
+        const chunkSize = 500;
+        for (let i = 0; i < upsertData.length; i += chunkSize) {
+          const chunk = upsertData.slice(i, i + chunkSize);
+          const { error: upsertError } = await supabase.from('sets').upsert(chunk);
+          if (upsertError) throw upsertError;
+          console.log(`[SYNC] Upserted chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(upsertData.length / chunkSize)}`);
+        }
         
         console.log(`[SYNC] Successfully synced sets.`);
         return { success: true, processed: upsertData.length, errors };
@@ -587,9 +624,35 @@ app.post('/api/sync-sheets', async (req, res) => {
 
 app.get('/api/racks', async (req, res) => {
   try {
-    const { data: racks, error } = await getSupabase().from('racks').select('*');
-    if (error) throw error;
-    res.json(racks || []);
+    const supabase = getSupabase();
+    let allRacks: any[] = [];
+    let from = 0;
+    let to = 999;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data: racks, error } = await supabase
+        .from('racks')
+        .select('*')
+        .range(from, to)
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      
+      if (racks && racks.length > 0) {
+        allRacks = [...allRacks, ...racks];
+        if (racks.length < 1000) {
+          hasMore = false;
+        } else {
+          from += 1000;
+          to += 1000;
+        }
+      } else {
+        hasMore = false;
+      }
+    }
+
+    res.json(allRacks);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -597,9 +660,35 @@ app.get('/api/racks', async (req, res) => {
 
 app.get('/api/sets', async (req, res) => {
   try {
-    const { data: sets, error } = await getSupabase().from('sets').select('*');
-    if (error) throw error;
-    res.json(sets || []);
+    const supabase = getSupabase();
+    let allSets: any[] = [];
+    let from = 0;
+    let to = 999;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data: sets, error } = await supabase
+        .from('sets')
+        .select('*')
+        .range(from, to)
+        .order('id', { ascending: true });
+
+      if (error) throw error;
+      
+      if (sets && sets.length > 0) {
+        allSets = [...allSets, ...sets];
+        if (sets.length < 1000) {
+          hasMore = false;
+        } else {
+          from += 1000;
+          to += 1000;
+        }
+      } else {
+        hasMore = false;
+      }
+    }
+
+    res.json(allSets);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -620,9 +709,35 @@ app.get('/api/sheets/service-account', (req, res) => {
 app.get('/api/miners', async (req, res) => {
   console.log('GET /api/miners hit');
   try {
-    const { data: miners, error } = await getSupabase().from('miners').select('*');
-    if (error) throw error;
-    res.json(miners || []);
+    const supabase = getSupabase();
+    let allMiners: any[] = [];
+    let from = 0;
+    let to = 999;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data: miners, error } = await supabase
+        .from('miners')
+        .select('*')
+        .range(from, to)
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      
+      if (miners && miners.length > 0) {
+        allMiners = [...allMiners, ...miners];
+        if (miners.length < 1000) {
+          hasMore = false;
+        } else {
+          from += 1000;
+          to += 1000;
+        }
+      } else {
+        hasMore = false;
+      }
+    }
+
+    res.json(allMiners);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -724,15 +839,16 @@ async function updateGoogleSheetRow(type: string, item: any, isDeletion: boolean
         else if (['Tags', 'tags'].includes(h)) newRow[index] = (item.tags || []).join(', ');
         else if (['Sellable', 'sellable'].includes(h)) newRow[index] = item.sellable ? 'TRUE' : 'FALSE';
         else if (['Set', 'setId', 'collectionSet', 'Set ID'].includes(h)) newRow[index] = item.setId || '';
-        else if (['Market ID', 'marketUrl'].includes(h)) newRow[index] = item.marketUrl?.split('/').pop() || '';
+        else if (['Market ID', 'marketUrl'].includes(h)) newRow[index] = ''; // Removed top-level marketUrl for miners
         else if (['ID', 'id', 'Id'].includes(h)) newRow[index] = item.id;
         else {
           // Handle rarities
           const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Unreal', 'Legacy'];
           for (const r of RARITY_ORDER) {
-            if (h === `${r} Power`) newRow[index] = item.rarities?.[r]?.power || 0;
-            else if (h === `${r} Bonus`) newRow[index] = item.rarities?.[r]?.bonus || 0;
-            else if (h === `${r} Market ID`) newRow[index] = item.rarities?.[r]?.marketUrl?.split('/').pop() || '';
+            const rarityData = Array.isArray(item.rarities) ? item.rarities.find((rar: any) => rar.rarity === r) : null;
+            if (h === `${r} Power`) newRow[index] = rarityData?.power || 0;
+            else if (h === `${r} Bonus`) newRow[index] = rarityData?.bonus || 0;
+            else if (h === `${r} Market ID`) newRow[index] = rarityData?.marketUrl?.split('/').pop() || '';
           }
         }
       } else if (type === 'racks') {
@@ -937,22 +1053,24 @@ app.post('/api/miners/bulk', upload.single('file'), async (req, res) => {
           .replace(/-/g, '_')
           .replace(/\s+/g, '_');
 
-        const rarities: any = {};
+        const rarities: any[] = [];
         const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Unreal', 'Legacy'];
         
-          RARITY_ORDER.forEach(r => {
-            const powerKey = `${r} Power`;
-            const bonusKey = `${r} Bonus`;
-            const marketKey = `${r} Market ID`;
-            
-            if (raw[powerKey] !== undefined || raw[bonusKey] !== undefined) {
-              rarities[r] = {
-                power: parseFloat(String(raw[powerKey] || 0)),
-                bonus: parseFloat(String(raw[bonusKey] || 0)),
-                marketUrl: raw[marketKey] || undefined
-              };
-            }
+        RARITY_ORDER.forEach(r => {
+          const powerKey = `${r} Power`;
+          const bonusKey = `${r} Bonus`;
+          const marketKey = `${r} Market ID`;
+          
+          const powerVal = raw[powerKey] !== undefined ? String(raw[powerKey]).replace(/,/g, '') : '0';
+          const bonusVal = raw[bonusKey] !== undefined ? String(raw[bonusKey]).replace(/,/g, '').replace(/%/g, '') : '0';
+
+          rarities.push({
+            rarity: r,
+            power: parseFloat(powerVal) || 0,
+            bonus: parseFloat(bonusVal) || 0,
+            marketUrl: raw[marketKey] || undefined
           });
+        });
 
         const minerData = {
           id,

@@ -32,22 +32,21 @@ function MinerCard({ miner, onEdit, onDelete, currentUser }: MinerCardProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   
   const imageUrl = ensureFullUrl(miner.image, 'miners', '.gif');
-  const mainMarketUrl = ensureFullUrl(miner.marketUrl, ASSET_URLS.miner(miner.id, '')); // This is a bit tricky, but let's use the default if it's an ID
 
   // Base stats (Common)
-  const baseStats = miner.rarities[Rarity.COMMON] || Object.values(miner.rarities)[0]!;
+  const baseStats = miner.rarities[Rarity.COMMON] || (Object.values(miner.rarities) as MinerRarity[])[0];
+  if (!baseStats) return null;
+  
   const basePower = formatPower(baseStats.power);
   const baseMarketUrl = ensureFullUrl(baseStats.marketUrl, MARKET_BASE_URL);
   
   // Other rarities (excluding Common)
-  const otherRarities = (Object.keys(miner.rarities) as Rarity[])
-    .filter(r => {
-      const rarityKey = String(r).toLowerCase();
-      return rarityKey !== 'common' && rarityKey !== Rarity.COMMON.toLowerCase();
-    })
+  const otherRarities = (Object.entries(miner.rarities) as [Rarity, MinerRarity][])
+    .filter(([rarity, stats]) => rarity !== Rarity.COMMON && !!stats)
+    .map(([rarity, stats]) => ({ rarity, ...stats }))
     .sort((a, b) => {
-      const orderA = RARITY_ORDER.findIndex(r => r.toLowerCase() === a.toLowerCase());
-      const orderB = RARITY_ORDER.findIndex(r => r.toLowerCase() === b.toLowerCase());
+      const orderA = RARITY_ORDER.indexOf(a.rarity);
+      const orderB = RARITY_ORDER.indexOf(b.rarity);
       return orderA - orderB;
     });
 
@@ -199,8 +198,8 @@ function MinerCard({ miner, onEdit, onDelete, currentUser }: MinerCardProps) {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-700/20">
-                          {(otherRarities || []).map(r => {
-                            const stats = miner.rarities[r]!;
+                          {(otherRarities || []).map(stats => {
+                            const r = stats.rarity;
                             const p = formatPower(stats.power);
                             const rarityMarketUrl = ensureFullUrl(stats.marketUrl, MARKET_BASE_URL);
                             return (
@@ -363,15 +362,14 @@ export default function MinerSearch({ onEdit }: MinerSearchProps) {
     let b = 0;
     allMiners.forEach(m => {
       if (filterRarity === 'Any') {
-        Object.values(m.rarities).forEach(r => {
-          const stats = r as MinerRarity | undefined;
+        (Object.values(m.rarities) as MinerRarity[]).forEach(stats => {
           if (stats) {
             if (stats.power > p) p = stats.power;
             if (stats.bonus > b) b = stats.bonus;
           }
         });
       } else {
-        const stats = m.rarities[filterRarity as Rarity] as MinerRarity | undefined;
+        const stats = m.rarities[filterRarity as Rarity];
         if (stats) {
           if (stats.power > p) p = stats.power;
           if (stats.bonus > b) b = stats.bonus;
@@ -462,14 +460,13 @@ export default function MinerSearch({ onEdit }: MinerSearchProps) {
       
       let matchesRange = false;
       if (filterRarity === 'Any') {
-        matchesRange = Object.values(miner.rarities).some(s => {
-          const stats = s as MinerRarity | undefined;
+        matchesRange = (Object.values(miner.rarities) as MinerRarity[]).some(stats => {
           return stats && 
             stats.power >= minP && stats.power <= maxP && 
             stats.bonus >= minB && stats.bonus <= maxB;
         });
       } else {
-        const stats = miner.rarities[filterRarity as Rarity] as MinerRarity | undefined;
+        const stats = miner.rarities[filterRarity as Rarity];
         matchesRange = !!stats && 
           stats.power >= minP && stats.power <= maxP && 
           stats.bonus >= minB && stats.bonus <= maxB;
@@ -487,10 +484,10 @@ export default function MinerSearch({ onEdit }: MinerSearchProps) {
             return m.rarities[filterRarity as Rarity];
           }
           // If 'Any', use the max across all rarities
-          const statsList = Object.values(m.rarities);
+          const statsList = (Object.values(m.rarities) as MinerRarity[]).filter(Boolean);
           return {
-            power: Math.max(...(statsList || []).map(s => s.power)),
-            bonus: Math.max(...(statsList || []).map(s => s.bonus))
+            power: statsList.length > 0 ? Math.max(...statsList.map(s => s.power)) : 0,
+            bonus: statsList.length > 0 ? Math.max(...statsList.map(s => s.bonus)) : 0
           };
         };
 

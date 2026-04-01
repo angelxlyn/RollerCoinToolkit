@@ -385,7 +385,6 @@ export default function RoomSimulator() {
                                             const matchesCell = minerCellFilter ? m.cells === minerCellFilter : true;
                                             
                                             const matchesStats = Object.values(m.rarities).some(s => {
-                                              if (!s) return false;
                                               const matchesMinPower = minerMinPower !== '' ? s.power >= minerMinPower : true;
                                               const matchesMaxPower = minerMaxPower !== '' ? s.power <= minerMaxPower : true;
                                               const matchesMinBonus = minerMinBonus !== '' ? s.bonus >= minerMinBonus : true;
@@ -401,11 +400,13 @@ export default function RoomSimulator() {
                                               valA = a.name;
                                               valB = b.name;
                                             } else {
-                                              valA = a.rarities[a.defaultRarity]?.power || 0;
-                                              valB = b.rarities[b.defaultRarity]?.power || 0;
+                                              const statsA = a.rarities[a.defaultRarity];
+                                              const statsB = b.rarities[b.defaultRarity];
+                                              valA = statsA?.power || 0;
+                                              valB = statsB?.power || 0;
                                               if (minerSortBy === 'bonus') {
-                                                valA = a.rarities[a.defaultRarity]?.bonus || 0;
-                                                valB = b.rarities[b.defaultRarity]?.bonus || 0;
+                                                valA = statsA?.bonus || 0;
+                                                valB = statsB?.bonus || 0;
                                               }
                                             }
                                             return minerSortOrder === 'asc' ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
@@ -425,31 +426,30 @@ export default function RoomSimulator() {
                                             <div className="p-1.5 space-y-1">
                                               <p className="text-[9px] font-bold text-white truncate">{m.name}</p>
                                               <div className="flex flex-wrap gap-1">
-                                                {(Object.keys(m.rarities) as Rarity[]).map(rarity => {
-                                                  const rStats = m.rarities[rarity];
-                                                  if (!rStats) return null;
+                                                {Object.entries(m.rarities).map(([rarity, rStats]) => {
+                                                  const rarityKey = rarity as Rarity;
                                                   return (
                                                     <button
-                                                      key={rarity}
+                                                      key={rarityKey}
                                                       onClick={(e) => {
                                                         e.stopPropagation();
-                                                        addMiner(placedRack.id, m.id, rarity);
+                                                        addMiner(placedRack.id, m.id, rarityKey);
                                                       }}
                                                       className={cn(
                                                         "flex-1 py-0.5 rounded text-[8px] font-bold text-white transition-all hover:brightness-110",
-                                                        RARITY_BADGE_COLORS[rarity] || 'bg-slate-600'
+                                                        RARITY_BADGE_COLORS[rarityKey] || 'bg-slate-600'
                                                       )}
                                                     >
-                                                      {RARITY_ROMAN[rarity]}
+                                                      {RARITY_ROMAN[rarityKey]}
                                                     </button>
                                                   );
                                                 })}
                                               </div>
                                             </div>
-                                            <div className="bg-[#2a4a5a] px-1.5 py-0.5 flex justify-between items-center">
-                                              <span className="text-[8px] text-emerald-400 font-bold">{(m.rarities[m.defaultRarity]?.power || 0).toLocaleString()} Th/s</span>
-                                              <span className="text-[8px] text-blue-400 font-bold">+{m.rarities[m.defaultRarity]?.bonus}%</span>
-                                            </div>
+                                        <div className="bg-[#2a4a5a] px-1.5 py-0.5 flex justify-between items-center">
+                                          <span className="text-[8px] text-emerald-400 font-bold">{(m.rarities[m.defaultRarity]?.power || 0).toLocaleString()} Th/s</span>
+                                          <span className="text-[8px] text-blue-400 font-bold">+{m.rarities[m.defaultRarity]?.bonus || 0}%</span>
+                                        </div>
                                           </div>
                                         ))}
                                       </div>
@@ -669,18 +669,17 @@ export default function RoomSimulator() {
                         <div className="p-2 space-y-1">
                           <p className="text-[10px] font-bold text-white truncate">{m.name}</p>
                           <div className="grid grid-cols-3 gap-1">
-                            {(Object.keys(m.rarities) as Rarity[]).map(rarity => {
-                              const rStats = m.rarities[rarity];
-                              if (!rStats) return null;
+                            {Object.keys(m.rarities).map(rarity => {
+                              const rarityKey = rarity as Rarity;
                               return (
                                 <div
-                                  key={rarity}
+                                  key={rarityKey}
                                   className={cn(
                                     "py-0.5 rounded text-[8px] font-bold text-white text-center opacity-50",
-                                    RARITY_BADGE_COLORS[rarity] || 'bg-slate-600'
+                                    RARITY_BADGE_COLORS[rarityKey] || 'bg-slate-600'
                                   )}
                                 >
-                                  {RARITY_ROMAN[rarity]}
+                                  {RARITY_ROMAN[rarityKey]}
                                 </div>
                               );
                             })}
@@ -688,7 +687,7 @@ export default function RoomSimulator() {
                         </div>
                         <div className="bg-[#2a4a5a] px-2 py-1 flex justify-between items-center">
                           <span className="text-[9px] text-emerald-400 font-bold">{(m.rarities[m.defaultRarity]?.power || 0).toLocaleString()} Th/s</span>
-                          <span className="text-[9px] text-blue-400 font-bold">+{m.rarities[m.defaultRarity]?.bonus}%</span>
+                          <span className="text-[9px] text-blue-400 font-bold">+{m.rarities[m.defaultRarity]?.bonus || 0}%</span>
                         </div>
                       </div>
                     ))}

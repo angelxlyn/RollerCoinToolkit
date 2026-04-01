@@ -69,7 +69,12 @@ export const CONVERSION_RATES = {
 import minersData from './data/miners.json';
 import racksData from './data/racks.json';
 
-export const MINERS_DB = minersData as Miner[];
+export const MINERS_DB = (minersData as any[]).map(m => ({
+  ...m,
+  defaultRarity: Rarity.COMMON,
+  rarities: m.rarities
+})) as Miner[];
+
 export const RACKS = racksData as Rack[];
 
 export const TRUSTED_EMAILS = [
