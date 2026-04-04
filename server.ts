@@ -37,6 +37,7 @@ app.get('/api/debug-env', (req, res) => {
     VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY ? 'PRESENT (length: ' + process.env.VITE_SUPABASE_ANON_KEY.length + ')' : 'MISSING',
     SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ? 'PRESENT (length: ' + process.env.SUPABASE_ANON_KEY.length + ')' : 'MISSING',
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'PRESENT (length: ' + process.env.SUPABASE_SERVICE_ROLE_KEY.length + ')' : 'MISSING',
+    GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? 'PRESENT (length: ' + process.env.GOOGLE_SERVICE_ACCOUNT_JSON.length + ')' : 'MISSING',
     NODE_ENV: process.env.NODE_ENV,
     PORT: process.env.PORT
   };
@@ -173,7 +174,7 @@ app.get('/api/debug-supabase', async (req, res) => {
 
   try {
     const client = getAnonSupabase();
-    const { data, error } = await client.from('miners').select('count', { count: 'exact', head: true });
+    const { data, error } = await client.from('miners').select('id', { count: 'exact', head: true });
     results.dbTest = error ? { error } : { success: true, count: data };
   } catch (err: any) {
     results.dbTest = { error: err.message };
@@ -215,17 +216,27 @@ function extractSheetId(input: string): string {
 }
 
 // Google Sheets Sync Logic
-async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean = false) {
+async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean = false, providedSheetId?: string) {
   try {
     const supabase = getSupabase();
-    const { data: configDoc } = await supabase.from('settings').select('*').eq('type', 'sheets_config').single();
-    const config = configDoc?.configs?.[syncType];
+    let spreadsheetId = providedSheetId ? extractSheetId(providedSheetId) : null;
+
+    if (!spreadsheetId) {
+      const { data: configDoc } = await supabase.from('settings').select('*').eq('type', 'sheets_config').single();
+      const config = configDoc?.configs?.[syncType];
+      if (config?.sheetId) {
+        spreadsheetId = extractSheetId(config.sheetId);
+      }
+    }
     
-    if (!config || !config.sheetId || !process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-      return { success: false, message: `Google Sheets for ${syncType} not configured` };
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      return { success: false, message: "Google Service Account not configured in environment variables (GOOGLE_SERVICE_ACCOUNT_JSON is missing)" };
     }
 
-    const spreadsheetId = extractSheetId(config.sheetId);
+    if (!spreadsheetId) {
+      return { success: false, message: `Google Sheet ID for ${syncType} not found. Please enter the Sheet ID or URL in the Database Manager and click Save.` };
+    }
+
     console.log(`Attempting sync for ${syncType} with ID: ${spreadsheetId}`);
 
     const auth = new google.auth.GoogleAuth({
@@ -270,7 +281,7 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
       }
       const upsertData = data.map(raw => {
         try {
-          const name = raw.Miner || raw.name || raw.Name || raw["Miner Name"] || raw["Miner name"] || raw.Miners;
+          const name = raw.Miner || raw.name || raw.Name || raw["Miner Name"] || raw["Miner name"] || raw.Miners || raw.miner || raw.MINER;
           if (!name) {
             console.warn(`[SYNC] Skipping row: No miner name found. Available columns: ${Object.keys(raw).join(', ')}`);
             return null;
@@ -294,7 +305,7 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
             const marketUrl = raw[marketKey] ? ensureFullUrl(raw[marketKey], MARKET_BASE_URL) : undefined;
 
             // Include rarity if it has data or if it's one of the standard ones the user expects
-            if (power > 0 || bonus > 0 || marketUrl || r === 'Common' || r === 'Legacy') {
+            if (power > 0 || bonus > 0 || marketUrl || r === 'Common') {
               rarities[r] = {
                 power,
                 bonus,
@@ -313,12 +324,12 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
           const minerData: any = {
             id,
             name,
-            image: ensureFullUrl(raw["Image ID"] || raw.image, MINER_ASSET_BASE_URL, '.gif'),
-            cells: parseInt(String(raw.Cell || raw.cells || 1)),
-            description: raw.Description || raw.description || '',
-            tags: raw.Tags ? String(raw.Tags).split(',').map((t: string) => t.trim()) : [],
+            image: ensureFullUrl(raw["Image ID"] || raw.image || raw.Image || raw["Miner Image"], MINER_ASSET_BASE_URL, '.gif'),
+            cell: parseInt(String(raw.Cell || raw.cells || raw.Cells || raw.cell || 1)),
+            description: raw.Description || raw.description || raw.desc || '',
+            tags: (raw.Tags || raw.tags) ? String(raw.Tags || raw.tags).split(',').map((t: string) => t.trim()) : [],
             rarities,
-            sellable: String(raw.Sellable || raw.sellable || 'true').toLowerCase() === 'true',
+            sellable: String(raw.Sellable || raw.sellable || 'true').toLowerCase() !== 'false' && String(raw.Sellable || raw.sellable || 'true').toLowerCase() !== 'no',
             setId,
             updatedAt: new Date().toISOString()
           };
@@ -337,12 +348,12 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
         const chunkSize = 500;
         for (let i = 0; i < upsertData.length; i += chunkSize) {
           const chunk = upsertData.slice(i, i + chunkSize);
-          const { error: upsertError } = await supabase.from('miners').upsert(chunk);
+          const { error: upsertError } = await supabase.from('miners').upsert(chunk).select('id');
           if (upsertError) throw upsertError;
           console.log(`[SYNC] Upserted chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(upsertData.length / chunkSize)}`);
         }
         
-        const { count: totalMiners } = await supabase.from('miners').select('*', { count: 'exact', head: true });
+        const { count: totalMiners } = await supabase.from('miners').select('id', { count: 'exact', head: true });
         console.log(`[SYNC] Successfully synced miners. Total in DB: ${totalMiners}`);
         return { success: true, processed: upsertData.length, total: totalMiners, errors };
       } else {
@@ -617,8 +628,8 @@ app.post('/api/sheets-config', async (req, res) => {
 });
 
 app.post('/api/sync-sheets', async (req, res) => {
-  const { type, overwrite } = req.body;
-  const result = await syncGoogleSheets(type || "miners", overwrite);
+  const { type, overwrite, sheetId } = req.body;
+  const result = await syncGoogleSheets(type || "miners", overwrite, sheetId);
   res.json(result);
 });
 
@@ -633,7 +644,7 @@ app.get('/api/racks', async (req, res) => {
     while (hasMore) {
       const { data: racks, error } = await supabase
         .from('racks')
-        .select('*')
+        .select('id, name, slots, bonus, image, "setId", "updatedAt", "marketUrl"')
         .range(from, to)
         .order('name', { ascending: true });
 
@@ -669,7 +680,7 @@ app.get('/api/sets', async (req, res) => {
     while (hasMore) {
       const { data: sets, error } = await supabase
         .from('sets')
-        .select('*')
+        .select('id, name, levels, "updatedAt"')
         .range(from, to)
         .order('id', { ascending: true });
 
@@ -718,11 +729,14 @@ app.get('/api/miners', async (req, res) => {
     while (hasMore) {
       const { data: miners, error } = await supabase
         .from('miners')
-        .select('*')
+        .select('id, name, image, cells:cell, description, tags, rarities, sellable, "setId", "updatedAt"')
         .range(from, to)
         .order('name', { ascending: true });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error fetching miners:', error);
+        throw error;
+      }
       
       if (miners && miners.length > 0) {
         allMiners = [...allMiners, ...miners];
@@ -783,15 +797,55 @@ async function updateGoogleSheetRow(type: string, item: any, isDeletion: boolean
     if (rows.length === 0) return;
 
     const headers = rows[0];
-    const nameHeaderIndex = headers.findIndex(h => ['Miner', 'Rack', 'Set', 'name', 'Name', 'Rack Name', 'Set Name'].includes(String(h || '').trim()));
+    const nameHeaderIndex = headers.findIndex(h => ['Miner', 'Rack', 'Set', 'name', 'Name', 'Rack Name', 'Set Name', 'League', 'League Name'].includes(String(h || '').trim()));
     const idHeaderIndex = headers.findIndex(h => ['ID', 'id', 'Id'].includes(String(h || '').trim()));
     
-    if (nameHeaderIndex === -1 && idHeaderIndex === -1) {
+    if (nameHeaderIndex === -1 && idHeaderIndex === -1 && type !== 'rewards' && type !== 'times') {
       console.error(`Could not find name or ID header in sheet for ${type}`);
       return;
     }
 
-    // 2. Find if row exists
+    // Special handling for rewards and times (multiple rows)
+    if (type === 'rewards' || type === 'times') {
+      console.log(`[Google Sheets] Syncing all ${type} to sheet...`);
+      const settingsMap = item; // Map of League -> Currency -> Value
+      
+      for (const [league, currencies] of Object.entries(settingsMap)) {
+        let rowIndex = rows.findIndex((row, idx) => idx > 0 && String(row[nameHeaderIndex] || '').trim().toUpperCase() === league.toUpperCase());
+        
+        const newRow = new Array(headers.length).fill('');
+        headers.forEach((header, index) => {
+          const h = String(header || '').trim();
+          if (index === nameHeaderIndex) {
+            newRow[index] = league;
+          } else {
+            const currencyId = h.toLowerCase();
+            if (currencies[currencyId] !== undefined) {
+              newRow[index] = currencies[currencyId];
+            }
+          }
+        });
+
+        if (rowIndex !== -1) {
+          await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `A${rowIndex + 1}:ZZ${rowIndex + 1}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [newRow] },
+          });
+        } else {
+          await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'A1',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [newRow] },
+          });
+        }
+      }
+      return;
+    }
+
+    // 2. Find if row exists (for single items: miners, racks, sets)
     let rowIndex = -1;
     if (idHeaderIndex !== -1 && item.id) {
       rowIndex = rows.findIndex((row, idx) => idx > 0 && String(row[idHeaderIndex] || '').trim() === item.id);
@@ -834,7 +888,7 @@ async function updateGoogleSheetRow(type: string, item: any, isDeletion: boolean
       if (type === 'miners') {
         if (['Miner', 'name', 'Name'].includes(h)) newRow[index] = item.name;
         else if (['Image ID', 'image'].includes(h)) newRow[index] = item.image?.split('/').pop()?.replace('.gif', '') || '';
-        else if (['Cell', 'cells'].includes(h)) newRow[index] = item.cells;
+        else if (['Cell', 'cells'].includes(h)) newRow[index] = item.cells || item.cell;
         else if (['Description', 'description'].includes(h)) newRow[index] = item.description || '';
         else if (['Tags', 'tags'].includes(h)) newRow[index] = (item.tags || []).join(', ');
         else if (['Sellable', 'sellable'].includes(h)) newRow[index] = item.sellable ? 'TRUE' : 'FALSE';
@@ -845,7 +899,15 @@ async function updateGoogleSheetRow(type: string, item: any, isDeletion: boolean
           // Handle rarities
           const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Unreal', 'Legacy'];
           for (const r of RARITY_ORDER) {
-            const rarityData = Array.isArray(item.rarities) ? item.rarities.find((rar: any) => rar.rarity === r) : null;
+            let rarityData = null;
+            if (item.rarities) {
+              if (Array.isArray(item.rarities)) {
+                rarityData = item.rarities.find((rar: any) => rar.rarity === r);
+              } else {
+                rarityData = item.rarities[r];
+              }
+            }
+            
             if (h === `${r} Power`) newRow[index] = rarityData?.power || 0;
             else if (h === `${r} Bonus`) newRow[index] = rarityData?.bonus || 0;
             else if (h === `${r} Market ID`) newRow[index] = rarityData?.marketUrl?.split('/').pop() || '';
@@ -906,20 +968,41 @@ async function updateGoogleSheetRow(type: string, item: any, isDeletion: boolean
 
 app.post('/api/miners', async (req, res) => {
   try {
-    const minerData = req.body;
+    console.log('[API] POST /api/miners body:', JSON.stringify(req.body, null, 2));
+    const { id, name, description, cells, image, tags, rarities, sellable, setId } = req.body;
+    const minerData = { 
+      id, 
+      name, 
+      description, 
+      cell: parseInt(String(cells || 1)), 
+      image, 
+      tags, 
+      rarities, 
+      sellable: sellable !== undefined ? sellable : true, 
+      setId 
+    };
     
+    console.log('[API] Upserting minerData:', JSON.stringify(minerData, null, 2));
     const { error } = await getSupabase().from('miners').upsert({
       ...minerData,
       updatedAt: new Date().toISOString()
-    });
+    }).select('id');
 
-    if (error) throw error;
+    if (error) {
+      console.error('[API] Supabase upsert error:', error);
+      throw error;
+    }
 
     // Sync back to Google Sheets
-    await updateGoogleSheetRow('miners', minerData);
+    try {
+      await updateGoogleSheetRow('miners', minerData);
+    } catch (sheetErr: any) {
+      console.error('[API] Google Sheets sync error (non-fatal):', sheetErr.message);
+    }
     
     res.json({ success: true, miner: minerData });
   } catch (err: any) {
+    console.error('[API] POST /api/miners failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -928,7 +1011,7 @@ app.delete('/api/miners/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { data: miner, error: fetchError } = await getSupabase().from('miners').select('*').eq('id', id).single();
+    const { data: miner, error: fetchError } = await getSupabase().from('miners').select('id, name, image, cells:cell, description, tags, rarities, sellable, "setId", "updatedAt"').eq('id', id).single();
     if (fetchError) throw fetchError;
     if (!miner) return res.status(404).json({ error: "Miner not found" });
 
@@ -968,7 +1051,7 @@ app.delete('/api/racks/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { data: rack, error: fetchError } = await getSupabase().from('racks').select('*').eq('id', id).single();
+    const { data: rack, error: fetchError } = await getSupabase().from('racks').select('id, name, slots, bonus, image, "setId", "updatedAt", "marketUrl"').eq('id', id).single();
     if (fetchError) throw fetchError;
     if (!rack) return res.status(404).json({ error: "Rack not found" });
 
@@ -1008,7 +1091,7 @@ app.delete('/api/sets/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { data: set, error: fetchError } = await getSupabase().from('sets').select('*').eq('id', id).single();
+    const { data: set, error: fetchError } = await getSupabase().from('sets').select('id, name, levels, "updatedAt"').eq('id', id).single();
     if (fetchError) throw fetchError;
     if (!set) return res.status(404).json({ error: "Set not found" });
 
@@ -1053,7 +1136,7 @@ app.post('/api/miners/bulk', upload.single('file'), async (req, res) => {
           .replace(/-/g, '_')
           .replace(/\s+/g, '_');
 
-        const rarities: any[] = [];
+        const rarities: Record<string, any> = {};
         const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Unreal', 'Legacy'];
         
         RARITY_ORDER.forEach(r => {
@@ -1064,19 +1147,24 @@ app.post('/api/miners/bulk', upload.single('file'), async (req, res) => {
           const powerVal = raw[powerKey] !== undefined ? String(raw[powerKey]).replace(/,/g, '') : '0';
           const bonusVal = raw[bonusKey] !== undefined ? String(raw[bonusKey]).replace(/,/g, '').replace(/%/g, '') : '0';
 
-          rarities.push({
-            rarity: r,
-            power: parseFloat(powerVal) || 0,
-            bonus: parseFloat(bonusVal) || 0,
-            marketUrl: raw[marketKey] || undefined
-          });
+          const power = parseFloat(powerVal) || 0;
+          const bonus = parseFloat(bonusVal) || 0;
+          const marketUrl = raw[marketKey] || undefined;
+
+          if (r === 'Common' || power > 0 || bonus > 0 || marketUrl) {
+            rarities[r] = {
+              power,
+              bonus,
+              marketUrl: marketUrl ? (marketUrl.startsWith('http') ? marketUrl : `https://rollercoin.com/marketplace/item/${marketUrl}`) : undefined
+            };
+          }
         });
 
         const minerData = {
           id,
           name,
           image: raw["Image ID"] || raw.image || '',
-          cells: parseInt(String(raw.Cell || raw.cells || 1)),
+          cell: parseInt(String(raw.Cell || raw.cells || 1)),
           description: raw.Description || raw.description || '',
           tags: raw.Tags ? String(raw.Tags).split(',').map((t: string) => t.trim()) : [],
           rarities,
@@ -1093,8 +1181,12 @@ app.post('/api/miners/bulk', upload.single('file'), async (req, res) => {
     }).filter(op => op !== null);
 
     if (upsertData.length > 0) {
-      const { error } = await getSupabase().from('miners').upsert(upsertData);
-      if (error) throw error;
+      console.log(`[API] Bulk upserting ${upsertData.length} miners...`);
+      const { error } = await getSupabase().from('miners').upsert(upsertData).select('id');
+      if (error) {
+        console.error('[API] Bulk upsert error:', error);
+        throw error;
+      }
     }
 
     res.json({ success: true, processed: upsertData.length, errors });
@@ -1198,6 +1290,14 @@ app.post('/api/settings', async (req, res) => {
     });
 
     if (error) throw error;
+
+    // Sync back to Google Sheets
+    if (settingsData.blockRewards) {
+      await updateGoogleSheetRow('rewards', settingsData.blockRewards);
+    }
+    if (settingsData.blockTimes) {
+      await updateGoogleSheetRow('times', settingsData.blockTimes);
+    }
     
     res.json({ success: true });
   } catch (err: any) {

@@ -98,7 +98,7 @@ export default function App() {
   const navItems = [
     { id: 'calculator', label: 'Earnings Calc', icon: Calculator },
     { id: 'parts', label: 'Parts & Crafting', icon: (props: any) => <CustomIcon src="/icons/parts.svg" {...props} /> },
-    { id: 'simulator', label: 'Room Simulator', icon: LayoutIcon, disabled: true },
+    { id: 'simulator', label: 'Room Simulator', icon: LayoutIcon },
     { id: 'search', label: 'Miner Search', icon: (props: any) => <CustomIcon src="/icons/miners.svg" {...props} /> },
     { id: 'database', label: 'Database', icon: Database },
   ];
@@ -110,7 +110,7 @@ export default function App() {
       case 'parts': return <PartsCalculator />;
       case 'simulator': return <RoomSimulator />;
       case 'search': return <MinerSearch onEdit={handleEditMiner} />;
-      case 'database': return <DatabaseManager editMiner={editMiner} onCancelEdit={() => setEditMiner(null)} />;
+      case 'database': return <DatabaseManager editMiner={editMiner} onCancelEdit={() => setEditMiner(null)} onEdit={setEditMiner} />;
       default: return <Dashboard onNavigate={setActiveTool} />;
     }
   };

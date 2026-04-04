@@ -196,8 +196,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       description: 'Plan your room layout, manage rack bonuses, and maximize power.',
       icon: LayoutIcon,
       color: 'from-purple-500 to-pink-500',
-      delay: 0.3,
-      disabled: true
+      delay: 0.3
     },
     {
       id: 'search',

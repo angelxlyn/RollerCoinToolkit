@@ -66,17 +66,6 @@ export const CONVERSION_RATES = {
   [Rarity.COMMON]: { [Rarity.COMMON]: 1 },
 };
 
-import minersData from './data/miners.json';
-import racksData from './data/racks.json';
-
-export const MINERS_DB = (minersData as any[]).map(m => ({
-  ...m,
-  defaultRarity: Rarity.COMMON,
-  rarities: m.rarities
-})) as Miner[];
-
-export const RACKS = racksData as Rack[];
-
 export const TRUSTED_EMAILS = [
   'roller@rc.gg',
   // Add other trusted emails here
@@ -131,7 +120,7 @@ export const PART_MARKET_BASE_URL = 'https://rollercoin.com/marketplace/buy/muta
 export const ASSET_URLS = {
   rarity: (rarity: string) => {
     if (rarity.toLowerCase() === 'legacy') {
-      return 'https://productionassets.rollercoin.com/main-app/3f1f9d7e52b162770fcd8b72c4b33dd5/assets/img/D_5qvuWhkX-PFUFKeh0mq.png';
+      return 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/D_5qvuWhkX-PFUFKeh0mq.png';
     }
     const levelMap: Record<string, string> = {
       'common': 'level_1',

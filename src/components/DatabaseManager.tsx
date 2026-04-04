@@ -11,6 +11,7 @@ import {
   Loader2, 
   AlertCircle,
   CheckCircle2,
+  Shield,
   Image as ImageIcon,
   Link as LinkIcon,
   Tag as TagIcon,
@@ -49,9 +50,10 @@ interface FormMinerRarity {
 interface DatabaseManagerProps {
   editMiner?: Miner | null;
   onCancelEdit?: () => void;
+  onEdit?: (miner: Miner) => void;
 }
 
-export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseManagerProps) {
+export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: DatabaseManagerProps) {
   const [user, setUser] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'miner' | 'blocks' | 'racks' | 'sets'>('miner');
@@ -98,6 +100,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
   const [setSearchQuery, setSetSearchQuery] = useState('');
   const [setCurrentPage, setSetCurrentPage] = useState(1);
   const setItemsPerPage = 6;
+  const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
 
   const [showSyncConfig, setShowSyncConfig] = useState<Record<string, boolean>>({
     miners: false,
@@ -110,6 +113,15 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
   const [uploading, setUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  
+  // Clear error after 3 seconds
+  useEffect(() => {
+    if (uploadError) {
+      const timer = setTimeout(() => setUploadError(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [uploadError]);
+
   const [isIdentifying, setIsIdentifying] = useState(false);
   const [bulkStatus, setBulkStatus] = useState<{ total: number, processed: number, errors: string[] } | null>(null);
   
@@ -120,6 +132,25 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
     racks: { sheetId: '' },
     sets: { sheetId: '' }
   });
+
+  // Clear sheet config error status after 3 seconds
+  useEffect(() => {
+    const hasError = Object.values(sheetConfigs).some((config: any) => config.status?.startsWith('Error'));
+    if (hasError) {
+      const timer = setTimeout(() => {
+        setSheetConfigs(prev => {
+          const next = { ...prev };
+          Object.keys(next).forEach(key => {
+            if (next[key].status?.startsWith('Error')) {
+              next[key] = { ...next[key], status: undefined };
+            }
+          });
+          return next;
+        });
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [sheetConfigs]);
   const [isSyncing, setIsSyncing] = useState<string | null>(null);
   const [showPurgeConfirm, setShowPurgeConfirm] = useState<{ type: string } | null>(null);
 
@@ -146,15 +177,30 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
   }, []);
 
   useEffect(() => {
+    const fetchServiceAccount = async () => {
+      try {
+        const res = await fetch(`${window.location.origin}/api/sheets/service-account`);
+        const data = await res.json();
+        if (data.email) setServiceAccountEmail(data.email);
+      } catch (err) {
+        console.error("Failed to fetch service account email", err);
+      }
+    };
+    fetchServiceAccount();
+  }, []);
+
+  useEffect(() => {
     if (user && activeTab === 'blocks') {
       loadSettings();
+    }
+    if (user && (activeTab === 'miners' || activeTab === 'sets')) {
+      fetchAllMiners();
     }
     if (user && activeTab === 'racks') {
       fetchRacks();
     }
     if (user && activeTab === 'sets') {
       fetchSets();
-      fetchAllMiners();
       fetchRacks();
     }
   }, [user, activeTab]);
@@ -390,16 +436,29 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
     setIsSyncing(type);
     setUploadError(null);
     try {
+      // Auto-save sheet ID if provided but might not be in DB
+      if (sheetConfigs[type]?.sheetId) {
+        const rawId = sheetConfigs[type].sheetId;
+        const match = rawId.match(/\/d\/([a-zA-Z0-9-_]+)/);
+        const sheetId = match ? match[1] : rawId.trim();
+
+        await fetch(`${window.location.origin}/api/sheets-config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, sheetId })
+        });
+      }
+
       const res = await fetch(`${window.location.origin}/api/sync-sheets`, { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, overwrite })
+        body: JSON.stringify({ type, overwrite, sheetId: sheetConfigs[type]?.sheetId })
       });
       const data = await res.json();
       if (data.success) {
         setSyncSuccess(type);
         setTimeout(() => setSyncSuccess(null), 3000);
-        if (type === 'miners') fetchMiners();
+        if (type === 'miners') fetchAllMiners();
         if (type === 'racks') fetchRacks();
         if (type === 'sets') fetchSets();
         fetchSheetsConfig();
@@ -695,7 +754,22 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
       setMinerCells(editMiner.cells);
       setMinerImage(editMiner.image || '');
       setMinerTags(editMiner.tags);
-      setRarities(editMiner.rarities || {});
+      
+      // Handle both array and object formats for rarities
+      let loadedRarities: Partial<Record<Rarity, MinerRarity>> = {};
+      if (Array.isArray(editMiner.rarities)) {
+        (editMiner.rarities as any[]).forEach((r: any) => {
+          loadedRarities[r.rarity as Rarity] = {
+            power: r.power,
+            bonus: r.bonus,
+            marketUrl: r.marketUrl
+          };
+        });
+      } else {
+        loadedRarities = { ...editMiner.rarities };
+      }
+      setRarities(loadedRarities);
+      
       setMinerSetId(editMiner.setId || '');
       setMinerSellable(editMiner.sellable !== false);
     } else {
@@ -960,11 +1034,17 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
       RARITY_ORDER.forEach(rarity => {
         const stats = rarities[rarity];
         if (stats) {
-          processedRarities[rarity] = {
-            power: parseFloat(String(stats.power || 0)),
-            bonus: parseFloat(String(stats.bonus || 0)),
-            marketUrl: stats.marketUrl ? ensureFullUrl(stats.marketUrl, MARKET_BASE_URL) : undefined
-          };
+          const power = parseFloat(String(stats.power || 0));
+          const bonus = parseFloat(String(stats.bonus || 0));
+          const hasMarketUrl = !!stats.marketUrl && stats.marketUrl.trim() !== '';
+          
+          if (rarity === Rarity.COMMON || power > 0 || bonus > 0 || hasMarketUrl) {
+            processedRarities[rarity] = {
+              power,
+              bonus,
+              marketUrl: hasMarketUrl ? ensureFullUrl(stats.marketUrl!, MARKET_BASE_URL) : undefined
+            };
+          }
         }
       });
 
@@ -985,6 +1065,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
       await saveMiner(minerData);
       
       setUploadSuccess(true);
+      fetchAllMiners(); // Refresh local list
       setTimeout(() => setUploadSuccess(false), 3000);
       
       if (editMiner && onCancelEdit) {
@@ -1363,6 +1444,21 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                   {syncSuccess === 'miners' ? 'Synced!' : 'Sync'}
                 </button>
               </div>
+
+              {uploadError && isSyncing === null && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-red-400 text-[10px] font-bold">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <p>{uploadError}</p>
+                </div>
+              )}
+
+              {syncSuccess === 'miners' && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-2 text-emerald-500 text-[10px] font-bold">
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                  <p>Miners database successfully synchronized with Google Sheets!</p>
+                </div>
+              )}
+
               {sheetConfigs.miners.status && sheetConfigs.miners.status.startsWith("Error") && (
                 <p className="text-[10px] font-bold text-red-400">
                   {sheetConfigs.miners.status}
@@ -1637,12 +1733,6 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
 
               {/* Submit Section */}
               <div className="space-y-4">
-                {uploadError && (
-                  <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-3 text-red-400">
-                    <AlertCircle className="w-5 h-5 shrink-0" />
-                    <p className="text-sm">{uploadError}</p>
-                  </div>
-                )}
                 {uploadSuccess && (
                   <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center gap-3 text-emerald-400">
                     <CheckCircle2 className="w-5 h-5 shrink-0" />
@@ -1787,6 +1877,20 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                       </button>
                     </div>
 
+                    {uploadError && isSyncing === type && (
+                      <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-red-400 text-[9px] font-bold">
+                        <AlertCircle className="w-3 h-3 shrink-0" />
+                        <p>{uploadError}</p>
+                      </div>
+                    )}
+
+                    {syncSuccess === type && (
+                      <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-2 text-emerald-500 text-[9px] font-bold">
+                        <CheckCircle2 className="w-3 h-3 shrink-0" />
+                        <p>{type === 'rewards' ? 'Rewards' : 'Times'} synced!</p>
+                      </div>
+                    )}
+
                     {sheetConfigs[type].status && sheetConfigs[type].status.startsWith("Error") && (
                       <div className="px-2 py-1 rounded-lg border text-[9px] font-bold truncate bg-red-500/10 border-red-500/20 text-red-400">
                         {sheetConfigs[type].status}
@@ -1796,13 +1900,6 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                 ))}
               </div>
             </div>
-
-            {uploadError && (
-              <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-3 text-red-400">
-                <AlertCircle className="w-5 h-5 shrink-0" />
-                <p className="text-sm">{uploadError}</p>
-              </div>
-            )}
 
             {uploadSuccess && (
               <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center gap-3 text-emerald-400">
@@ -2035,6 +2132,21 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                   {syncSuccess === 'racks' ? 'Synced!' : 'Sync'}
                 </button>
               </div>
+
+              {uploadError && isSyncing === 'racks' && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-red-400 text-[10px] font-bold">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <p>{uploadError}</p>
+                </div>
+              )}
+
+              {syncSuccess === 'racks' && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-2 text-emerald-500 text-[10px] font-bold">
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                  <p>Racks database successfully synchronized with Google Sheets!</p>
+                </div>
+              )}
+
               {sheetConfigs.racks.status && sheetConfigs.racks.status.startsWith("Error") && (
                 <p className="text-[10px] font-bold text-red-400">
                   {sheetConfigs.racks.status}
@@ -2132,12 +2244,6 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                 </div>
 
                 <div className="flex flex-col gap-3">
-                  {uploadError && (
-                    <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-3 text-red-400">
-                      <AlertCircle className="w-5 h-5 shrink-0" />
-                      <p className="text-sm">{uploadError}</p>
-                    </div>
-                  )}
                   {uploadSuccess && (
                     <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center gap-3 text-emerald-400">
                       <CheckCircle2 className="w-5 h-5 shrink-0" />
@@ -2267,6 +2373,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                             setRackBonus(rack.bonus);
                             setRackImage(rack.image || '');
                             setRackSetId(rack.setId || '');
+                            setRackMarketUrl(rack.marketUrl || '');
                           }}
                           className="p-1.5 hover:bg-emerald-500/10 text-slate-400 hover:text-emerald-400 rounded-lg transition-all"
                         >
@@ -2406,6 +2513,21 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                   {syncSuccess === 'sets' ? 'Synced!' : 'Sync'}
                 </button>
               </div>
+
+              {uploadError && isSyncing === 'sets' && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-red-400 text-[10px] font-bold">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <p>{uploadError}</p>
+                </div>
+              )}
+
+              {syncSuccess === 'sets' && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-2 text-emerald-500 text-[10px] font-bold">
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                  <p>Sets database successfully synchronized with Google Sheets!</p>
+                </div>
+              )}
+
               {sheetConfigs.sets.status && sheetConfigs.sets.status.startsWith("Error") && (
                 <p className="text-[10px] font-bold text-red-400">
                   {sheetConfigs.sets.status}
@@ -2506,12 +2628,6 @@ export default function DatabaseManager({ editMiner, onCancelEdit }: DatabaseMan
                 </div>
 
                 <div className="flex flex-col gap-3">
-                  {uploadError && (
-                    <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-3 text-red-400">
-                      <AlertCircle className="w-5 h-5 shrink-0" />
-                      <p className="text-sm">{uploadError}</p>
-                    </div>
-                  )}
                   {uploadSuccess && (
                     <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center gap-3 text-emerald-400">
                       <CheckCircle2 className="w-5 h-5 shrink-0" />

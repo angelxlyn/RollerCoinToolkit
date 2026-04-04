@@ -33,16 +33,42 @@ function MinerCard({ miner, onEdit, onDelete, currentUser }: MinerCardProps) {
   
   const imageUrl = ensureFullUrl(miner.image, 'miners', '.gif');
 
+  // Normalize rarities to object format
+  const normalizedRarities = useMemo(() => {
+    if (!miner.rarities) return {} as Partial<Record<Rarity, MinerRarity>>;
+    if (Array.isArray(miner.rarities)) {
+      const obj: Partial<Record<Rarity, MinerRarity>> = {};
+      (miner.rarities as any[]).forEach((r: any) => {
+        obj[r.rarity as Rarity] = {
+          power: r.power,
+          bonus: r.bonus,
+          marketUrl: r.marketUrl
+        };
+      });
+      return obj;
+    }
+    return miner.rarities;
+  }, [miner.rarities]);
+
   // Base stats (Common)
-  const baseStats = miner.rarities[Rarity.COMMON] || (Object.values(miner.rarities) as MinerRarity[])[0];
+  const baseStats = normalizedRarities[Rarity.COMMON] || (Object.values(normalizedRarities) as MinerRarity[])[0];
   if (!baseStats) return null;
   
   const basePower = formatPower(baseStats.power);
   const baseMarketUrl = ensureFullUrl(baseStats.marketUrl, MARKET_BASE_URL);
   
   // Other rarities (excluding Common)
-  const otherRarities = (Object.entries(miner.rarities) as [Rarity, MinerRarity][])
-    .filter(([rarity, stats]) => rarity !== Rarity.COMMON && !!stats)
+  const otherRarities = (Object.entries(normalizedRarities) as [Rarity, MinerRarity][])
+    .filter(([rarity, stats]) => {
+      if (rarity === Rarity.COMMON) return false;
+      if (!stats) return false;
+      
+      const power = Number(stats.power || 0);
+      const bonus = Number(stats.bonus || 0);
+      const hasMarketUrl = !!stats.marketUrl && stats.marketUrl.trim() !== '';
+      
+      return power > 0 || bonus > 0 || hasMarketUrl;
+    })
     .map(([rarity, stats]) => ({ rarity, ...stats }))
     .sort((a, b) => {
       const orderA = RARITY_ORDER.indexOf(a.rarity);
