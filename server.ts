@@ -73,6 +73,13 @@ const supabaseUrl = normalizeUrl(rawUrl);
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
 
+app.get('/api/config', (req, res) => {
+  res.json({
+    supabaseUrl: supabaseUrl,
+    supabaseAnonKey: supabaseAnonKey
+  });
+});
+
 console.log('Server Supabase Config:', {
   rawUrl: rawUrl ? `${rawUrl.substring(0, 10)}...` : 'MISSING',
   normalizedUrl: supabaseUrl,

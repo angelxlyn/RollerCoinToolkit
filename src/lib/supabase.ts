@@ -17,15 +17,30 @@ const normalizeUrl = (url: string) => {
   return normalized.replace(/\/$/, "");
 };
 
-const rawUrl = (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) || 
-               (import.meta.env?.VITE_SUPABASE_URL) || 
-               "";
+const getInitialConfig = () => {
+  const url = (import.meta.env?.VITE_SUPABASE_URL) || "";
+  const key = (import.meta.env?.VITE_SUPABASE_ANON_KEY) || "";
+  return { url, key };
+};
+
+let { url: rawUrl, key: supabaseAnonKey } = getInitialConfig();
+
+// If build-time variables are missing, try to fetch from server
+if (!rawUrl || !supabaseAnonKey) {
+  try {
+    // Synchronous-like fetch using top-level await (supported by Vite)
+    const response = await fetch('/api/config');
+    if (response.ok) {
+      const config = await response.json();
+      if (config.supabaseUrl && !rawUrl) rawUrl = config.supabaseUrl;
+      if (config.supabaseAnonKey && !supabaseAnonKey) supabaseAnonKey = config.supabaseAnonKey;
+    }
+  } catch (err) {
+    console.error('Failed to fetch Supabase config at runtime:', err);
+  }
+}
 
 const supabaseUrl = normalizeUrl(rawUrl);
-
-const supabaseAnonKey = (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) || 
-                        (import.meta.env?.VITE_SUPABASE_ANON_KEY) || 
-                        "";
 
 console.log('--- Supabase Client Debug ---');
 console.log('Raw URL present:', !!rawUrl);
@@ -36,4 +51,4 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Supabase credentials missing! Check your AI Studio Secrets for VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseAnonKey || 'placeholder');

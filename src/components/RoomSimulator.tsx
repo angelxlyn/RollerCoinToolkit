@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Miner, Rack, Rarity, MinerRarity } from '../types';
+import { Miner, Rack, Rarity, MinerRarity, CollectionSet } from '../types';
 import { fetchMiners } from '../services/apiService';
 import MinerImage from './MinerImage';
 import { Layout as LayoutIcon, Plus, Trash2, Zap, Shield, Info, Layers, Search, Filter, ArrowUpDown, ChevronDown, ChevronUp, X, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface PlacedMiner {
   id: string;
@@ -16,6 +17,7 @@ interface PlacedRack {
   id: string;
   rackId: string;
   slotIndex: number;
+  roomIndex: number;
   miners: (PlacedMiner | null)[];
 }
 
@@ -26,21 +28,55 @@ const RARITY_ROMAN = {
   [Rarity.EPIC]: 'IV',
   [Rarity.LEGENDARY]: 'V',
   [Rarity.UNREAL]: 'VI',
+  [Rarity.LEGACY]: 'L',
+};
+
+const RARITY_ICONS = {
+  [Rarity.COMMON]: 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/miner_rarity_1.png',
+  [Rarity.UNCOMMON]: 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/miner_rarity_2.png',
+  [Rarity.RARE]: 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/miner_rarity_3.png',
+  [Rarity.EPIC]: 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/miner_rarity_4.png',
+  [Rarity.LEGENDARY]: 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/miner_rarity_5.png',
+  [Rarity.UNREAL]: 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/miner_rarity_6.png',
+  [Rarity.LEGACY]: 'https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/D_5qvuWhkX-PFUFKeh0mq.png',
 };
 
 const RARITY_BADGE_COLORS = {
-  [Rarity.COMMON]: 'bg-gray-500',
-  [Rarity.UNCOMMON]: 'bg-green-500',
-  [Rarity.RARE]: 'bg-cyan-500',
-  [Rarity.EPIC]: 'bg-magenta-500',
-  [Rarity.LEGENDARY]: 'bg-yellow-500',
+  [Rarity.COMMON]: 'bg-slate-500',
+  [Rarity.UNCOMMON]: 'bg-emerald-500',
+  [Rarity.RARE]: 'bg-blue-500',
+  [Rarity.EPIC]: 'bg-fuchsia-500',
+  [Rarity.LEGENDARY]: 'bg-amber-500',
   [Rarity.UNREAL]: 'bg-red-500',
+  [Rarity.LEGACY]: 'bg-slate-800',
 };
 
-function RarityBadge({ rarity }: { rarity: Rarity }) {
+function RarityBadge({ rarity, size = 'md' }: { rarity: Rarity, size?: 'sm' | 'md' }) {
+  const [error, setError] = useState(false);
+
+  const sizeClasses = size === 'sm' ? "w-3 h-3" : "w-4 h-4";
+  const badgeClasses = size === 'sm' 
+    ? "px-0.5 py-0 text-[6px] font-bold min-w-[10px] border-[0.5px]" 
+    : "px-1 py-0.5 text-[8px] font-black min-w-[14px] border";
+
+  if (!error) {
+    return (
+      <div className={cn("z-10", sizeClasses)}>
+        <img 
+          src={RARITY_ICONS[rarity]} 
+          alt={rarity}
+          className="w-full h-full object-contain"
+          referrerPolicy="no-referrer"
+          onError={() => setError(true)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className={cn(
-      "absolute top-1 left-1 px-1 py-0.5 rounded-sm text-[8px] font-black text-white shadow-sm z-10 flex items-center justify-center min-w-[14px] border border-white/20",
+      "rounded-sm text-white shadow-sm z-10 flex items-center justify-center border-white/20",
+      badgeClasses,
       RARITY_BADGE_COLORS[rarity] || 'bg-slate-500'
     )}>
       {RARITY_ROMAN[rarity]}
@@ -48,23 +84,48 @@ function RarityBadge({ rarity }: { rarity: Rarity }) {
   );
 }
 
+const formatPower = (ghs: number) => {
+  if (ghs >= 1000000000) return `${(ghs / 1000000000).toFixed(3)} Eh/s`;
+  if (ghs >= 1000000) return `${(ghs / 1000000).toFixed(3)} Ph/s`;
+  if (ghs >= 1000) return `${(ghs / 1000).toFixed(3)} Th/s`;
+  return `${ghs.toFixed(3)} Gh/s`;
+};
+
 export default function RoomSimulator() {
-  const [activeRoom, setActiveRoom] = useState(1);
-  const [placedRacks, setPlacedRacks] = useState<PlacedRack[]>([]);
+  const [activeRoom, setActiveRoom] = useState(() => {
+    const saved = localStorage.getItem('room-simulator-active-room');
+    return saved ? parseInt(saved, 10) : 1;
+  });
+  const [placedRacks, setPlacedRacks] = useState<PlacedRack[]>(() => {
+    const saved = localStorage.getItem('room-simulator-placed-racks');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const [miners, setMiners] = useState<Miner[]>([]);
   const [racks, setRacks] = useState<Rack[]>([]);
+  const [sets, setSets] = useState<CollectionSet[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Persistence
+  useEffect(() => {
+    localStorage.setItem('room-simulator-placed-racks', JSON.stringify(placedRacks));
+  }, [placedRacks]);
+
+  useEffect(() => {
+    localStorage.setItem('room-simulator-active-room', activeRoom.toString());
+  }, [activeRoom]);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [minersData, racksRes] = await Promise.all([
+        const [minersData, racksRes, setsRes] = await Promise.all([
           fetchMiners(),
-          fetch(`${window.location.origin}/api/racks`).then(res => res.json())
+          fetch(`${window.location.origin}/api/racks`).then(res => res.json()),
+          fetch(`${window.location.origin}/api/sets`).then(res => res.json())
         ]);
         setMiners(minersData);
         setRacks(racksRes);
+        setSets(setsRes);
       } catch (err) {
         console.error('Failed to load simulator data:', err);
       } finally {
@@ -94,7 +155,9 @@ export default function RoomSimulator() {
     if (selectedSlot !== null) {
       setIsEditing(true);
       const hasRack = placedRacks.some(r => r.slotIndex === selectedSlot);
-      setInventoryTab(hasRack ? 'miners' : 'racks');
+      if (!hasRack) {
+        setInventoryTab('racks');
+      }
     } else {
       setIsEditing(false);
     }
@@ -235,30 +298,106 @@ export default function RoomSimulator() {
     });
 
     const bonusHashRate = totalRawMinerPower * (totalBonusPercentage / 100);
-    const finalPower = totalRawMinerPower + bonusHashRate + totalRackBonusPower;
+    
+    // Set Bonuses
+    const validSetMiners = new Map<string, Set<string>>();
+    
+    placedRacks.forEach(pr => {
+      const rack = racks.find(r => r.id === pr.rackId);
+      if (!rack?.setId) return;
+      
+      const setId = rack.setId;
+      if (!validSetMiners.has(setId)) validSetMiners.set(setId, new Set());
+      
+      pr.miners.forEach(pm => {
+        if (!pm) return;
+        const miner = miners.find(m => m.id === pm.minerId);
+        if (miner?.setId === setId) {
+          // This miner is in the correct set rack
+          validSetMiners.get(setId)!.add(`miner-${miner.id}-${pm.rarity}`);
+        }
+      });
+    });
+
+    let totalSetBonusPercentage = 0;
+    let totalSetBonusPower = 0;
+    const activeSets: { name: string; level: number; bonus: number; power: number }[] = [];
+
+    validSetMiners.forEach((items, setId) => {
+      const set = sets.find(s => s.id === setId);
+      if (set) {
+        const count = items.size;
+        let highestLevel = 0;
+        let setBonus = 0;
+        let setPower = 0;
+
+        // Sort levels by count to ensure cumulative logic works correctly
+        const sortedLevels = [...set.levels].sort((a, b) => a.count - b.count);
+
+        sortedLevels.forEach(lvl => {
+          if (count >= lvl.count) {
+            highestLevel = Math.max(highestLevel, lvl.level);
+            setBonus += lvl.bonus || 0;
+            setPower += lvl.power || 0;
+          }
+        });
+
+        if (highestLevel > 0) {
+          totalSetBonusPercentage += setBonus;
+          totalSetBonusPower += setPower;
+          activeSets.push({
+            name: set.name,
+            level: highestLevel,
+            bonus: setBonus,
+            power: setPower
+          });
+        }
+      }
+    });
+
+    const finalBonusPercentage = totalBonusPercentage + totalSetBonusPercentage;
+    const finalBonusHashRate = totalRawMinerPower * (finalBonusPercentage / 100);
+    const finalPower = totalRawMinerPower + finalBonusHashRate + totalRackBonusPower + totalSetBonusPower;
 
     return {
       rawMinerPower: totalRawMinerPower,
-      bonusPercentage: totalBonusPercentage,
-      bonusHashRate: bonusHashRate,
+      bonusPercentage: finalBonusPercentage,
+      bonusHashRate: finalBonusHashRate,
       rackBonusPower: totalRackBonusPower,
+      setBonusPower: totalSetBonusPower,
+      activeSets,
       finalPower
     };
-  }, [placedRacks]);
+  }, [placedRacks, miners, racks, sets]);
 
   const addRack = (rackId: string) => {
-    if (selectedSlot === null) return;
     const rackDef = racks.find(r => r.id === rackId);
     if (!rackDef) return;
 
-    const newRack: PlacedRack = {
-      id: Math.random().toString(36).substr(2, 9),
-      rackId,
-      slotIndex: selectedSlot,
-      miners: Array(rackDef.slots).fill(null)
-    };
-    setPlacedRacks([...placedRacks, newRack]);
-    setSelectedSlot(null);
+    let targetSlot = selectedSlot;
+    const isOccupied = (slot: number) => placedRacks.some(pr => pr.slotIndex === slot && pr.roomIndex === activeRoom);
+
+    if (targetSlot === null || isOccupied(targetSlot)) {
+      const roomSlots = roomConfig[activeRoom as keyof typeof roomConfig].slots;
+      for (let i = 0; i < roomSlots; i++) {
+        if (!isOccupied(i)) {
+          targetSlot = i;
+          break;
+        }
+      }
+    }
+
+    if (targetSlot !== null && !isOccupied(targetSlot)) {
+      const newRack: PlacedRack = {
+        id: Math.random().toString(36).substr(2, 9),
+        rackId,
+        slotIndex: targetSlot,
+        roomIndex: activeRoom,
+        miners: Array(rackDef.slots).fill(null)
+      };
+      setPlacedRacks([...placedRacks, newRack]);
+      setSelectedSlot(targetSlot);
+    }
   };
 
   const addMiner = (rackId: string, minerId: string, rarity: Rarity) => {
@@ -268,6 +407,9 @@ export default function RoomSimulator() {
     const rackDef = racks.find(r => r.id === placedRacks[rackIndex].rackId);
     if (!rackDef) return;
 
+    const minerDef = miners.find(m => m.id === minerId);
+    if (!minerDef) return;
+
     const newPlacedRacks = [...placedRacks];
     const targetRack = { ...newPlacedRacks[rackIndex] };
     
@@ -276,28 +418,73 @@ export default function RoomSimulator() {
       targetRack.miners = Array(rackDef.slots).fill(null);
     }
 
-    // If a shelf is selected, use it, otherwise find the first available
-    let targetShelf = selectedShelf;
-    if (targetShelf === null) {
-      const firstEmpty = targetRack.miners.findIndex(m => m === null);
-      if (firstEmpty !== -1) {
-        targetShelf = firstEmpty;
+    let targetSlot = selectedShelf;
+    if (targetSlot === null) {
+      // Find first available slot that can fit this miner
+      if (minerDef.cells === 2) {
+        // Find first empty row
+        for (let i = 0; i < rackDef.slots; i += 2) {
+          if (targetRack.miners[i] === null && targetRack.miners[i+1] === null) {
+            targetSlot = i;
+            break;
+          }
+        }
+      } else {
+        // Find first empty cell
+        for (let i = 0; i < rackDef.slots; i++) {
+          if (targetRack.miners[i] === null) {
+            // If it's an odd index, check if the previous slot has a 2-cell miner
+            if (i % 2 === 1) {
+              const prev = targetRack.miners[i-1];
+              if (prev) {
+                const prevDef = miners.find(m => m.id === prev.minerId);
+                if (prevDef?.cells === 2) continue;
+              }
+            }
+            targetSlot = i;
+            break;
+          }
+        }
       }
     }
 
-    if (targetShelf !== null && targetShelf >= 0 && targetShelf < targetRack.miners.length) {
-      targetRack.miners[targetShelf] = {
-        id: Math.random().toString(36).substr(2, 9),
-        minerId,
-        rarity,
-        slotIndex: targetShelf
-      };
+    if (targetSlot !== null && targetSlot >= 0 && targetSlot < targetRack.miners.length) {
+      if (minerDef.cells === 2) {
+        const rowStart = Math.floor(targetSlot / 2) * 2;
+        // Check if row is empty
+        const m1 = targetRack.miners[rowStart];
+        const m2 = targetRack.miners[rowStart + 1];
+        if (m1 === null && m2 === null) {
+          targetRack.miners[rowStart] = {
+            id: Math.random().toString(36).substr(2, 9),
+            minerId,
+            rarity,
+            slotIndex: rowStart
+          };
+          // Clear the other slot just in case
+          targetRack.miners[rowStart + 1] = null;
+        } else {
+          return; // Row not empty
+        }
+      } else {
+        // Check if slot is occupied by a 2-cell miner from the left
+        if (targetSlot % 2 === 1) {
+          const prev = targetRack.miners[targetSlot - 1];
+          if (prev) {
+            const prevDef = miners.find(m => m.id === prev.minerId);
+            if (prevDef?.cells === 2) return; // Occupied
+          }
+        }
+        targetRack.miners[targetSlot] = {
+          id: Math.random().toString(36).substr(2, 9),
+          minerId,
+          rarity,
+          slotIndex: targetSlot
+        };
+      }
       newPlacedRacks[rackIndex] = targetRack;
       setPlacedRacks(newPlacedRacks);
-      // Don't reset shelf selection if we want to keep adding to it, 
-      // but usually we want to move to the next one or just stay.
-      // Let's keep it selected for now or reset if it was a manual selection.
-      if (selectedShelf !== null) setSelectedShelf(null);
+      setSelectedShelf(null);
     }
   };
 
@@ -325,6 +512,15 @@ export default function RoomSimulator() {
     }
   };
 
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  const clearRoom = () => {
+    setPlacedRacks(placedRacks.filter(r => r.roomIndex !== activeRoom));
+    setSelectedSlot(null);
+    setSelectedShelf(null);
+    setShowClearConfirm(false);
+  };
+
   if (loading) {
     return (
       <div className="min-h-[400px] flex items-center justify-center">
@@ -340,9 +536,11 @@ export default function RoomSimulator() {
     <div className="space-y-8">
       {!isEditing && (
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-bold text-white">Room Simulator</h2>
-            <p className="text-slate-400">Plan your layout and maximize your power potential.</p>
+          <div className="flex items-center gap-4">
+            <div>
+              <h2 className="text-3xl font-bold text-white">Room Simulator</h2>
+              <p className="text-slate-400">Plan your layout and maximize your power potential.</p>
+            </div>
           </div>
           <div className="flex w-full md:w-fit gap-1.5 p-1 bg-slate-800/50 rounded-xl border border-slate-700/50">
             {[1, 2, 3, 4].map((num) => (
@@ -376,7 +574,7 @@ export default function RoomSimulator() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-6">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">Room:</span>
+                  <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">Rooms:</span>
                   <div className="flex gap-1.5 p-1 bg-slate-800/50 rounded-xl border border-slate-700/50">
                     {[1, 2, 3, 4].map((num) => (
                       <button
@@ -401,16 +599,25 @@ export default function RoomSimulator() {
                   </span>
                 </div>
               </div>
-              <button 
-                onClick={() => {
-                  setSelectedSlot(null);
-                  setSelectedShelf(null);
-                }}
-                className="flex items-center justify-center w-10 h-10 bg-slate-800 hover:bg-slate-700 text-white rounded-xl transition-all"
-                title="Exit Editor"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowClearConfirm(true)}
+                  className="flex items-center justify-center w-10 h-10 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl border border-red-500/20 transition-all"
+                  title="Clear Room"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+                <button 
+                  onClick={() => {
+                    setSelectedSlot(null);
+                    setSelectedShelf(null);
+                  }}
+                  className="flex items-center justify-center w-10 h-10 bg-slate-800 hover:bg-slate-700 text-white rounded-xl transition-all"
+                  title="Exit Editor"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
           )}
 
@@ -443,17 +650,12 @@ export default function RoomSimulator() {
                    }} />
 
               {/* Blueprint Markings */}
-              <div className="absolute top-6 left-6 w-16 h-16 border-t-2 border-l-2 border-white/10 pointer-events-none" />
-              <div className="absolute top-6 right-6 w-16 h-16 border-t-2 border-r-2 border-white/10 pointer-events-none" />
-              <div className="absolute bottom-6 left-6 w-16 h-16 border-b-2 border-l-2 border-white/10 pointer-events-none" />
-              <div className="absolute bottom-6 right-6 w-16 h-16 border-b-2 border-r-2 border-white/10 pointer-events-none" />
-              
               <div className={cn(
                 "relative grid grid-cols-6 gap-x-4 gap-y-8 transition-all duration-500",
                 isEditing ? "w-[900px]" : "w-full max-w-[750px] mx-auto"
               )}>
               {Array.from({ length: currentRoomSlots }).map((_, i) => {
-                const placedRack = placedRacks.find(r => r.slotIndex === i);
+                const placedRack = placedRacks.find(r => r.slotIndex === i && r.roomIndex === activeRoom);
                 const rackDef = placedRack ? racks.find(r => r.id === placedRack.rackId) : null;
                 
                 return (
@@ -471,15 +673,14 @@ export default function RoomSimulator() {
                         selectedSlot === i && "ring-2 ring-emerald-500 rounded-xl shadow-[0_0_15px_rgba(16,185,129,0.3)]"
                       )}>
                         {/* Rack Structure (Fallback/Base) */}
-                        <div className={cn(
-                          "absolute inset-0 border-x-4 border-slate-400/30 flex flex-col justify-between py-2",
-                          rackDef.image ? "opacity-20" : "opacity-100"
-                        )}>
-                          <div className="h-1 bg-slate-400/20 w-full" />
-                          <div className="h-1 bg-slate-400/20 w-full" />
-                          <div className="h-1 bg-slate-400/20 w-full" />
-                          <div className="h-1 bg-slate-400/20 w-full" />
-                        </div>
+                        {!rackDef.image && (
+                          <div className="absolute inset-0 border-x-4 border-slate-400/30 flex flex-col justify-between py-2">
+                            <div className="h-1 bg-slate-400/20 w-full" />
+                            <div className="h-1 bg-slate-400/20 w-full" />
+                            <div className="h-1 bg-slate-400/20 w-full" />
+                            <div className="h-1 bg-slate-400/20 w-full" />
+                          </div>
+                        )}
 
                         {/* Rack Image from RC */}
                         {rackDef.image && (
@@ -488,62 +689,168 @@ export default function RoomSimulator() {
                             name={rackDef.name}
                             baseUrl="racks"
                             extension=".png"
-                            className="absolute inset-0 w-full h-full object-contain pointer-events-none z-0" 
+                            className="absolute inset-0 w-full h-full object-fill pointer-events-none z-0 opacity-100" 
                             fallbackClassName="absolute inset-0 w-full h-full"
                           />
                         )}
 
-                        {/* Shelves */}
-                        <div className="flex-1 flex flex-col justify-around px-2 py-1 gap-1">
-                          {placedRack.miners.map((m, shelfIdx) => {
-                            const minerDef = m ? miners.find(min => min.id === m.minerId) : null;
-                            const isShelfSelected = selectedSlot === i && selectedShelf === shelfIdx;
-                            
-                            return (
-                              <div 
-                                key={shelfIdx} 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedSlot(i);
-                                  setSelectedShelf(selectedShelf === shelfIdx ? null : shelfIdx);
-                                }}
-                                className={cn(
-                                  "relative h-full bg-black/40 rounded border border-white/5 flex items-center justify-center group/shelf hover:border-emerald-500/50 transition-all cursor-pointer",
-                                  isShelfSelected && "border-emerald-500 bg-emerald-500/10 shadow-[0_0_8px_rgba(16,185,129,0.2)]"
-                                )}
-                              >
-                                {minerDef ? (
-                                  <div className="w-full h-full p-0.5 flex items-center justify-center group/miner relative">
-                                    <MinerImage 
-                                      image={minerDef.image} 
-                                      name={minerDef.name}
-                                      className="h-full object-contain" 
-                                      fallbackClassName="h-full"
-                                    />
-                                    
-                                    {/* Miner Context Menu on Hover */}
-                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover/miner:opacity-100 transition-opacity flex items-center justify-center gap-1 z-20">
-                                      <button 
+                        {/* Miners Wrapper - Absolute Positioning Template */}
+                        <div className="absolute inset-0 flex justify-center pointer-events-none z-10">
+                          <div className="relative w-[126px] h-full pointer-events-auto">
+                            {Array.from({ length: rackDef.slots / 2 }).map((_, rowIdx) => {
+                              const slot1Idx = rowIdx * 2;
+                              const slot2Idx = rowIdx * 2 + 1;
+                              const m1 = placedRack.miners[slot1Idx];
+                              const m2 = placedRack.miners[slot2Idx];
+                              
+                              const miner1Def = m1 ? miners.find(min => min.id === m1.minerId) : null;
+                              const miner2Def = m2 ? miners.find(min => min.id === m2.minerId) : null;
+                              
+                              const isM1TwoCell = miner1Def?.cells === 2;
+                              
+                              // RC Template Offsets (Adjusted to fit our container)
+                              const topOffsets = [15, 60, 105, 150];
+                              const top = topOffsets[rowIdx] || 0;
+
+                              return (
+                                <div key={rowIdx} className="absolute w-full h-[40px]" style={{ top: `${top}px` }}>
+                                  {isM1TwoCell ? (
+                                    <div 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedSlot(i);
+                                        setSelectedShelf(selectedShelf === slot1Idx ? null : slot1Idx);
+                                      }}
+                                      className={cn(
+                                        "absolute w-[100px] h-[45px] transition-all cursor-pointer group/shelf",
+                                        selectedSlot === i && selectedShelf === slot1Idx && "ring-1 ring-emerald-500 bg-emerald-500/10 rounded"
+                                      )}
+                                      style={{ left: '13px' }}
+                                    >
+                                      <div className="w-full h-full relative group/miner">
+                                        <MinerImage 
+                                          image={miner1Def?.image} 
+                                          name={miner1Def?.name}
+                                          className="w-full h-full object-contain" 
+                                        />
+                                        {m1 && (
+                                          <div className="absolute top-0 left-[2px] z-20">
+                                            <RarityBadge rarity={m1.rarity} size="sm" />
+                                          </div>
+                                        )}
+                                        <div className="absolute inset-0 bg-black/80 opacity-0 group-hover/miner:opacity-100 transition-opacity flex items-center justify-center gap-1 z-30 rounded">
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              removeMiner(placedRack.id, slot1Idx);
+                                            }}
+                                            className="p-1 bg-red-500/20 hover:bg-red-500/40 rounded text-red-500 transition-colors"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      {/* Cell 1 */}
+                                      <div 
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          removeMiner(placedRack.id, shelfIdx);
+                                          setSelectedSlot(i);
+                                          setSelectedShelf(selectedShelf === slot1Idx ? null : slot1Idx);
                                         }}
-                                        className="p-1 bg-red-500/20 hover:bg-red-500/40 rounded text-red-500 transition-colors"
-                                        title="Remove Miner"
+                                        className={cn(
+                                          "absolute w-[50px] h-[45px] transition-all cursor-pointer group/shelf",
+                                          selectedSlot === i && selectedShelf === slot1Idx && "ring-1 ring-emerald-500 bg-emerald-500/10 rounded"
+                                        )}
+                                        style={{ left: '13px' }}
                                       >
-                                        <Trash2 className="w-3 h-3" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <Plus className={cn(
-                                    "w-3 h-3 transition-all",
-                                    isShelfSelected ? "text-emerald-500 scale-125" : "text-white/5 group-hover/shelf:text-white/20"
-                                  )} />
-                                )}
-                              </div>
-                            );
-                          })}
+                                        {miner1Def ? (
+                                          <div className="w-full h-full relative group/miner">
+                                            <MinerImage 
+                                              image={miner1Def.image} 
+                                              name={miner1Def.name}
+                                              className="w-full h-full object-contain" 
+                                            />
+                                            {m1 && (
+                                              <div className="absolute top-0 left-[2px] z-20">
+                                                <RarityBadge rarity={m1.rarity} size="sm" />
+                                              </div>
+                                            )}
+                                            <div className="absolute inset-0 bg-black/80 opacity-0 group-hover/miner:opacity-100 transition-opacity flex items-center justify-center gap-1 z-30 rounded">
+                                              <button 
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  removeMiner(placedRack.id, slot1Idx);
+                                                }}
+                                                className="p-1 bg-red-500/20 hover:bg-red-500/40 rounded text-red-500 transition-colors"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div className="w-full h-full flex items-center justify-center">
+                                            <Plus className={cn(
+                                              "w-3 h-3 transition-all",
+                                              selectedSlot === i && selectedShelf === slot1Idx ? "text-emerald-500 scale-125" : "text-white/5 group-hover/shelf:text-white/20"
+                                            )} />
+                                          </div>
+                                        )}
+                                      </div>
+                                      {/* Cell 2 */}
+                                      <div 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedSlot(i);
+                                          setSelectedShelf(selectedShelf === slot2Idx ? null : slot2Idx);
+                                        }}
+                                        className={cn(
+                                          "absolute w-[50px] h-[45px] transition-all cursor-pointer group/shelf",
+                                          selectedSlot === i && selectedShelf === slot2Idx && "ring-1 ring-emerald-500 bg-emerald-500/10 rounded"
+                                        )}
+                                        style={{ left: '63px' }}
+                                      >
+                                        {miner2Def ? (
+                                          <div className="w-full h-full relative group/miner">
+                                            <MinerImage 
+                                              image={miner2Def.image} 
+                                              name={miner2Def.name}
+                                              className="w-full h-full object-contain" 
+                                            />
+                                            {m2 && (
+                                              <div className="absolute top-0 left-[2px] z-20">
+                                                <RarityBadge rarity={m2.rarity} size="sm" />
+                                              </div>
+                                            )}
+                                            <div className="absolute inset-0 bg-black/80 opacity-0 group-hover/miner:opacity-100 transition-opacity flex items-center justify-center gap-1 z-30 rounded">
+                                              <button 
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  removeMiner(placedRack.id, slot2Idx);
+                                                }}
+                                                className="p-1 bg-red-500/20 hover:bg-red-500/40 rounded text-red-500 transition-colors"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div className="w-full h-full flex items-center justify-center">
+                                            <Plus className={cn(
+                                              "w-3 h-3 transition-all",
+                                              selectedSlot === i && selectedShelf === slot2Idx ? "text-emerald-500 scale-125" : "text-white/5 group-hover/shelf:text-white/20"
+                                            )} />
+                                          </div>
+                                        )}
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
 
                         {/* Rack Actions on Hover */}
@@ -578,25 +885,57 @@ export default function RoomSimulator() {
             <div className="p-6 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-[32px] shadow-xl shadow-emerald-500/20 text-white">
               <p className="text-xs font-bold uppercase tracking-widest opacity-80 mb-4">Total Power</p>
               <div className="space-y-4">
-                <div>
-                  <p className="text-4xl font-black">{stats.finalPower.toLocaleString()} <span className="text-lg font-bold opacity-80">Gh/s</span></p>
+                <div title={`${stats.finalPower.toLocaleString()} Gh/s`}>
+                  <p className="text-4xl font-black">{formatPower(stats.finalPower)}</p>
                 </div>
                 <div className="pt-4 border-t border-white/20 space-y-2">
-                  <div className="flex justify-between text-sm">
+                  <div className="flex justify-between text-sm" title={`${stats.rawMinerPower.toLocaleString()} Gh/s`}>
                     <span className="opacity-80">Miners</span>
-                    <span className="font-bold">{stats.rawMinerPower.toLocaleString()} Gh/s</span>
+                    <span className="font-bold">{formatPower(stats.rawMinerPower)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="opacity-80">Bonus</span>
-                    <span className="font-bold">+{stats.bonusPercentage.toFixed(2)}% | {stats.bonusHashRate.toLocaleString()} Gh/s</span>
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <span>+{stats.bonusPercentage.toFixed(2)}%</span>
+                      <span className="opacity-80" title={`${stats.bonusHashRate.toLocaleString()} Gh/s`}>{formatPower(stats.bonusHashRate)}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-sm">
+                  <div className="flex justify-between text-sm" title={`${stats.rackBonusPower.toLocaleString()} Gh/s`}>
                     <span className="opacity-80">Rack Bonus</span>
-                    <span className="font-bold">{stats.rackBonusPower.toLocaleString()} Gh/s</span>
+                    <span className="font-bold">{formatPower(stats.rackBonusPower)}</span>
                   </div>
+                  {stats.setBonusPower > 0 && (
+                    <div className="flex justify-between text-sm" title={`${stats.setBonusPower.toLocaleString()} Gh/s`}>
+                      <span className="opacity-80">Set Bonus</span>
+                      <span className="font-bold">{formatPower(stats.setBonusPower)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
+
+            {stats.activeSets.length > 0 && (
+              <div className="p-6 bg-[#1a1a24] rounded-[32px] border border-slate-800">
+                <div className="flex items-center gap-2 mb-4">
+                  <Layers className="w-4 h-4 text-emerald-500" />
+                  <h3 className="text-xs font-bold text-white uppercase tracking-widest">Active Sets</h3>
+                </div>
+                <div className="space-y-3">
+                  {stats.activeSets.map((set, idx) => (
+                    <div key={idx} className="flex flex-col gap-1">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-bold text-white">{set.name}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 bg-emerald-500/10 text-emerald-500 rounded border border-emerald-500/20 font-bold">LVL {set.level}</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>+{set.bonus.toFixed(2)}% Bonus</span>
+                        {set.power > 0 && <span>+{formatPower(set.power)}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="p-6 bg-[#1a1a24] rounded-[32px] border border-slate-800">
               <div className="flex items-center gap-3 text-slate-400 mb-4">
@@ -865,29 +1204,29 @@ export default function RoomSimulator() {
             </div>
 
             {/* Horizontal Scrollable List */}
-            <div className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar p-4 rounded-b-[32px]">
-              <div className="flex gap-2 min-w-max h-full items-center">
+            <div className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar p-3 rounded-b-[32px]">
+              <div className="flex gap-1.5 min-w-max h-full items-center">
                 {inventoryTab === 'racks' ? (
                   filteredRacks.map(r => (
                     <button
                       key={r.id}
                       onClick={() => addRack(r.id)}
-                      className="w-36 h-full rounded-xl border border-slate-800 bg-[#0f0f14] text-left transition-all flex flex-col group relative overflow-hidden hover:border-emerald-500 hover:shadow-lg hover:shadow-emerald-500/10"
+                      className="w-32 h-full rounded-xl border border-slate-700/50 bg-[#0f0f14] text-left transition-all flex flex-col group relative overflow-hidden hover:border-emerald-500 hover:shadow-lg hover:shadow-emerald-500/10"
                     >
-                      <div className="relative flex-1 bg-slate-900/30 flex items-center justify-center">
+                      <div className="relative h-[65%] bg-slate-900/30 flex items-center justify-center p-2">
                         {r.image ? (
                           <MinerImage 
                             image={r.image} 
                             name={r.name}
                             baseUrl="racks"
                             extension=".png"
-                            className="w-full h-full object-cover group-hover:scale-110 transition-transform" 
+                            className="w-full h-full object-contain group-hover:scale-110 transition-transform" 
                           />
                         ) : (
-                          <LayoutIcon className="w-6 h-6 text-slate-600 group-hover:text-emerald-500 transition-colors" />
+                          <LayoutIcon className="w-5 h-5 text-slate-600 group-hover:text-emerald-500 transition-colors" />
                         )}
                         {r.setId && (
-                          <div className="absolute top-1 left-1 w-4 h-4 z-10">
+                          <div className="absolute top-1 left-1 w-3.5 h-3.5 z-10">
                             <img 
                               src="https://productionassets.rollercoin.com/main-app/b43f9115959008ad0e7bb9bb4afbfc75/assets/img/QoLz7tdVdjJnpmvG-wFgQ.png" 
                               alt="Set Icon"
@@ -897,12 +1236,12 @@ export default function RoomSimulator() {
                           </div>
                         )}
                       </div>
-                      <div className="p-2 bg-[#1a1a24] border-t border-slate-800/50">
-                        <p className="text-[10px] font-bold text-white truncate mb-0.5">{r.name}</p>
-                        <p className="text-[10px] text-emerald-400 font-bold">{r.bonus}%</p>
+                      <div className="flex-1 p-1.5 bg-[#1a1a24] border-t border-slate-800/50 flex flex-col justify-center">
+                        <p className="text-[9px] font-bold text-white leading-tight line-clamp-2 mb-0.5">{r.name}</p>
+                        <p className="text-[9px] text-emerald-400 font-bold">{r.bonus}%</p>
                       </div>
                       <div className="absolute inset-0 bg-emerald-500/0 group-hover:bg-emerald-500/5 transition-colors flex items-center justify-center">
-                        <Plus className="w-6 h-6 text-emerald-500 opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all" />
+                        <Plus className="w-5 h-5 text-emerald-500 opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all" />
                       </div>
                     </button>
                   ))
@@ -916,39 +1255,43 @@ export default function RoomSimulator() {
                       <>
                         <button 
                           onClick={() => setSelectedMinerForRarity(null)}
-                          className="w-12 h-full bg-slate-800/50 hover:bg-slate-700/50 rounded-xl flex items-center justify-center text-white transition-colors"
+                          className="w-10 h-full bg-slate-800/50 hover:bg-slate-700/50 rounded-xl flex items-center justify-center text-white transition-colors"
                         >
-                          <X className="w-5 h-5" />
+                          <X className="w-4 h-4" />
                         </button>
-                        {Object.entries(m.rarities).map(([rarity, data]) => {
-                          const rarityKey = rarity as Rarity;
-                          const rarityData = data as MinerRarity;
-                          return (
-                            <button 
-                              key={rarityKey} 
-                              onClick={() => selectedRack && addMiner(selectedRack.id, m.id, rarityKey)}
-                              className="w-40 h-full bg-[#0f0f14] border border-slate-800 rounded-xl overflow-hidden flex flex-col group/rarity-card transition-all text-left hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/10"
-                            >
-                              <div className="relative flex-1 bg-slate-900/30 flex items-center justify-center">
-                                <MinerImage 
-                                  image={m.image} 
-                                  name={m.name}
-                                  className="w-full h-full object-contain group-hover/rarity-card:scale-110 transition-transform" 
-                                />
-                                <div className="absolute top-1 left-1">
-                                  <RarityBadge rarity={rarityKey} />
+                        {Object.entries(m.rarities)
+                          .sort(([a], [b]) => {
+                            const order = [Rarity.COMMON, Rarity.UNCOMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY, Rarity.UNREAL, Rarity.LEGACY];
+                            return order.indexOf(a as Rarity) - order.indexOf(b as Rarity);
+                          })
+                          .map(([rarity, data]) => {
+                            const rarityKey = rarity as Rarity;
+                            const rarityData = data as MinerRarity;
+                            return (
+                              <button 
+                                key={rarityKey} 
+                                onClick={() => selectedRack && addMiner(selectedRack.id, m.id, rarityKey)}
+                                className="w-32 h-full bg-[#0f0f14] border border-slate-700/50 rounded-xl overflow-hidden flex flex-col group/rarity-card transition-all text-left hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/10"
+                              >
+                                <div className="relative h-[78%] bg-slate-900/30 flex items-center justify-center p-1">
+                                  <MinerImage 
+                                    image={m.image} 
+                                    name={m.name}
+                                    className="w-full h-full object-contain group-hover/rarity-card:scale-110 transition-transform" 
+                                  />
+                                  <div className="absolute top-1 left-1">
+                                    <RarityBadge rarity={rarityKey} />
+                                  </div>
                                 </div>
-                              </div>
-                              <div className="p-2 bg-[#1a1a24] border-t border-slate-800/50 space-y-1">
-                                <p className="text-[10px] font-bold text-white truncate">{m.name}</p>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] text-white font-bold">{(rarityData?.power || 0).toLocaleString()} <span className="text-slate-500 font-medium">Gh/s</span></span>
-                                  <span className="text-[10px] text-emerald-400 font-bold">| {rarityData?.bonus || 0}%</span>
+                                <div className="flex-1 py-0.5 px-1 bg-[#1a1a24] border-t border-slate-800/50 flex flex-col justify-center">
+                                  <div className="flex items-center justify-between px-0.5">
+                                    <span className="text-[9px] text-white font-bold">{formatPower(rarityData?.power || 0)}</span>
+                                    <span className="text-[9px] text-emerald-400 font-bold">{rarityData?.bonus || 0}%</span>
+                                  </div>
                                 </div>
-                              </div>
-                            </button>
-                          );
-                        })}
+                              </button>
+                            );
+                          })}
                       </>
                     );
                   })()
@@ -958,9 +1301,9 @@ export default function RoomSimulator() {
                       <button 
                         key={m.id} 
                         onClick={() => setSelectedMinerForRarity(m.id)}
-                        className="w-40 h-full bg-[#0f0f14] border border-slate-800 rounded-xl overflow-hidden flex flex-col group/miner-card transition-all text-left hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/10"
+                        className="w-32 h-full bg-[#0f0f14] border border-slate-700/50 rounded-xl overflow-hidden flex flex-col group/miner-card transition-all text-left hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/10"
                       >
-                        <div className="relative flex-1 bg-slate-900/30 flex items-center justify-center">
+                        <div className="relative h-[75%] bg-slate-900/30 flex items-center justify-center p-2">
                           <MinerImage 
                             image={m.image} 
                             name={m.name}
@@ -968,8 +1311,8 @@ export default function RoomSimulator() {
                             fallbackClassName="w-full h-full"
                           />
                         </div>
-                        <div className="p-2 bg-[#1a1a24] border-t border-slate-800/50">
-                          <p className="text-[10px] font-bold text-white truncate">{m.name}</p>
+                        <div className="flex-1 p-1.5 bg-[#1a1a24] border-t border-slate-800/50 flex items-center">
+                          <p className="text-[9px] font-bold text-white line-clamp-2 leading-tight">{m.name}</p>
                         </div>
                       </button>
                     );
@@ -980,6 +1323,34 @@ export default function RoomSimulator() {
           </div>
         )}
       </div>
+
+      {/* Clear Confirmation Modal */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full shadow-2xl"
+          >
+            <h3 className="text-xl font-bold text-white mb-2">Clear Entire Room?</h3>
+            <p className="text-slate-400 mb-6">This will permanently remove all racks and miners from the current simulator. This action cannot be undone.</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="flex-1 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={clearRoom}
+                className="flex-1 px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors"
+              >
+                Yes, Clear All
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
