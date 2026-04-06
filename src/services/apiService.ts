@@ -6,13 +6,14 @@ export async function fetchMiners(): Promise<Miner[]> {
   return response.json();
 }
 
-export async function saveMiner(miner: Miner): Promise<void> {
+export async function saveMiner(miner: Miner): Promise<any> {
   const response = await fetch(`${window.location.origin}/api/miners`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(miner),
   });
   if (!response.ok) throw new Error('Failed to save miner');
+  return response.json();
 }
 
 export async function deleteMiner(id: string): Promise<void> {

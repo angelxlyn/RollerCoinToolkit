@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Miner, Rack, Rarity, MinerRarity } from '../types';
 import { fetchMiners } from '../services/apiService';
 import MinerImage from './MinerImage';
@@ -114,6 +114,25 @@ export default function RoomSimulator() {
   }, [inventoryTab]);
 
   const [showFilters, setShowFilters] = useState(false);
+  const [showSort, setShowSort] = useState(false);
+  const filterRef = useRef<HTMLDivElement>(null);
+  const sortRef = useRef<HTMLDivElement>(null);
+
+  // Click outside to close filters/sort
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
+        setShowFilters(false);
+      }
+      if (sortRef.current && !sortRef.current.contains(event.target as Node)) {
+        setShowSort(false);
+      }
+    };
+    if (showFilters || showSort) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showFilters, showSort]);
 
   const filteredRacks = useMemo(() => {
     return racks
@@ -590,9 +609,9 @@ export default function RoomSimulator() {
 
         {/* Horizontal Inventory (Visible only when editing) */}
         {isEditing && (
-          <div className="flex-1 bg-[#1a1a24] rounded-t-[32px] border-t border-x border-slate-800 flex flex-col overflow-hidden shadow-2xl shrink-0 min-h-0">
+          <div className="flex-1 bg-[#1a1a24] rounded-t-[32px] border-t border-x border-slate-800 flex flex-col shadow-2xl shrink-0 min-h-0 relative">
             {/* Inventory Toolbar */}
-            <div className="px-6 py-3 border-b border-slate-800 flex items-center justify-between bg-[#1a1a24]/50 backdrop-blur-sm">
+            <div className="px-6 py-3 border-b border-slate-800 flex items-center justify-between bg-[#1a1a24]/50 backdrop-blur-sm relative z-50">
               <div className="flex items-center gap-4">
                 <div className="flex gap-1 p-1 bg-[#0f0f14] rounded-xl border border-slate-800">
                   <button 
@@ -626,7 +645,7 @@ export default function RoomSimulator() {
                       className="bg-[#0f0f14] border border-slate-800 rounded-xl pl-9 pr-4 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-all w-40 md:w-56"
                     />
                   </div>
-                  <div className="relative">
+                  <div className="relative" ref={filterRef}>
                     <button 
                       onClick={() => setShowFilters(!showFilters)}
                       className={cn(
@@ -638,7 +657,7 @@ export default function RoomSimulator() {
                     </button>
 
                     {showFilters && (
-                      <div className="absolute bottom-full left-0 mb-2 w-64 bg-[#1a1a24] border border-slate-800 rounded-2xl shadow-2xl p-4 z-50 space-y-4">
+                      <div className="absolute bottom-full left-0 mb-2 w-64 bg-[#1a1a24] border border-slate-800 rounded-2xl shadow-2xl p-4 z-[100] space-y-4">
                         <div className="flex items-center justify-between mb-2">
                           <h4 className="text-xs font-bold text-white uppercase tracking-wider">Filters</h4>
                           <button onClick={() => setShowFilters(false)} className="text-slate-500 hover:text-white">
@@ -795,10 +814,16 @@ export default function RoomSimulator() {
               </div>
 
               <div className="flex items-center gap-3">
-                <div className="relative group/sort">
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-[#0f0f14] border border-slate-800 rounded-xl cursor-pointer hover:border-slate-600 transition-all">
+                <div className="relative" ref={sortRef}>
+                  <div 
+                    onClick={() => setShowSort(!showSort)}
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-1.5 bg-[#0f0f14] border rounded-xl cursor-pointer transition-all",
+                      showSort ? "border-emerald-500 text-emerald-500" : "border-slate-800 text-slate-300 hover:border-slate-600"
+                    )}
+                  >
                     <ArrowUpDown className="w-3.5 h-3.5 text-slate-500" />
-                    <span className="text-[10px] font-bold text-slate-300 whitespace-nowrap">
+                    <span className="text-[10px] font-bold whitespace-nowrap">
                       {inventoryTab === 'racks' ? (
                         rackSortBy === 'bonus-desc' ? 'Bonus: High - Low' :
                         rackSortBy === 'bonus-asc' ? 'Bonus: Low - High' :
@@ -814,39 +839,33 @@ export default function RoomSimulator() {
                     <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
                   </div>
                   
-                  <div className="absolute bottom-full right-0 mb-2 w-48 bg-[#1a1a24] border border-slate-800 rounded-xl shadow-2xl overflow-hidden opacity-0 invisible group-hover/sort:opacity-100 group-hover/sort:visible transition-all z-50">
-                    {inventoryTab === 'racks' ? (
-                      <>
-                        <button onClick={() => setRackSortBy('bonus-desc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: High - Low</button>
-                        <button onClick={() => setRackSortBy('bonus-asc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: Low - High</button>
-                        <button onClick={() => setRackSortBy('name-asc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: A - Z</button>
-                        <button onClick={() => setRackSortBy('name-desc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: Z - A</button>
-                      </>
-                    ) : (
-                      <>
-                        <button onClick={() => setMinerSortBy('power-desc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Power: High - Low</button>
-                        <button onClick={() => setMinerSortBy('power-asc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Power: Low - High</button>
-                        <button onClick={() => setMinerSortBy('bonus-desc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: High - Low</button>
-                        <button onClick={() => setMinerSortBy('bonus-asc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: Low - High</button>
-                        <button onClick={() => setMinerSortBy('name-asc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: A - Z</button>
-                        <button onClick={() => setMinerSortBy('name-desc')} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: Z - A</button>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="flex gap-1.5">
-                  <button className="p-1.5 bg-[#0f0f14] border border-slate-800 rounded-lg text-slate-500 hover:text-white transition-colors">
-                    <ChevronUp className="w-4 h-4 rotate-[-90deg]" />
-                  </button>
-                  <button className="p-1.5 bg-[#0f0f14] border border-slate-800 rounded-lg text-slate-500 hover:text-white transition-colors">
-                    <ChevronUp className="w-4 h-4 rotate-90" />
-                  </button>
+                  {showSort && (
+                    <div className="absolute bottom-full right-0 mb-2 w-48 bg-[#1a1a24] border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-[100]">
+                      {inventoryTab === 'racks' ? (
+                        <>
+                          <button onClick={() => { setRackSortBy('bonus-desc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: High - Low</button>
+                          <button onClick={() => { setRackSortBy('bonus-asc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: Low - High</button>
+                          <button onClick={() => { setRackSortBy('name-asc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: A - Z</button>
+                          <button onClick={() => { setRackSortBy('name-desc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: Z - A</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => { setMinerSortBy('power-desc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Power: High - Low</button>
+                          <button onClick={() => { setMinerSortBy('power-asc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Power: Low - High</button>
+                          <button onClick={() => { setMinerSortBy('bonus-desc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: High - Low</button>
+                          <button onClick={() => { setMinerSortBy('bonus-asc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Bonus: Low - High</button>
+                          <button onClick={() => { setMinerSortBy('name-asc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: A - Z</button>
+                          <button onClick={() => { setMinerSortBy('name-desc'); setShowSort(false); }} className="w-full px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Name: Z - A</button>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* Horizontal Scrollable List */}
-            <div className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar p-4">
+            <div className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar p-4 rounded-b-[32px]">
               <div className="flex gap-2 min-w-max h-full items-center">
                 {inventoryTab === 'racks' ? (
                   filteredRacks.map(r => (

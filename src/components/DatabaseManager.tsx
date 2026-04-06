@@ -22,6 +22,7 @@ import {
   Box,
   Clock,
   Download,
+  RefreshCw,
   Layout as LayoutIcon,
   ChevronDown,
   ChevronUp,
@@ -69,7 +70,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
   const [minerImage, setMinerImage] = useState('');
   const [minerTags, setMinerTags] = useState<string[]>([]);
   const [currentTag, setCurrentTag] = useState('');
-  const [rarities, setRarities] = useState<Partial<Record<Rarity, MinerRarity>>>({});
+  const [rarities, setRarities] = useState<Partial<Record<Rarity, FormMinerRarity>>>({});
   const [minerSetId, setMinerSetId] = useState<string>('');
   const [minerSellable, setMinerSellable] = useState<boolean>(true);
 
@@ -464,6 +465,43 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
         fetchSheetsConfig();
       } else {
         setUploadError(data.message || data.error || "Sync failed");
+      }
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setIsSyncing(null);
+    }
+  };
+
+  const handlePushToSheets = async (type: string) => {
+    setIsSyncing(type + '_push');
+    setUploadError(null);
+    try {
+      // Auto-save sheet ID if provided
+      if (sheetConfigs[type]?.sheetId) {
+        const rawId = sheetConfigs[type].sheetId;
+        const match = rawId.match(/\/d\/([a-zA-Z0-9-_]+)/);
+        const sheetId = match ? match[1] : rawId.trim();
+
+        await fetch(`${window.location.origin}/api/sheets-config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, sheetId })
+        });
+      }
+
+      const res = await fetch(`${window.location.origin}/api/push-sheets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSyncSuccess(type + '_push');
+        setTimeout(() => setSyncSuccess(null), 5000);
+        fetchSheetsConfig();
+      } else {
+        setUploadError(data.error || data.message || "Push failed");
       }
     } catch (err: any) {
       setUploadError(err.message);
@@ -987,12 +1025,18 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
     setMinerTags(minerTags.filter(t => t !== tag));
   };
 
-  const updateRarity = (rarity: Rarity, field: keyof MinerRarity, value: string) => {
+  const updateRarity = (rarity: Rarity, field: keyof FormMinerRarity, value: string) => {
+    let finalValue = value;
+    if (field === 'power') {
+      // Remove spaces if pasted or typed
+      finalValue = value.replace(/\s+/g, '');
+    }
+    
     setRarities(prev => ({
       ...prev,
       [rarity]: {
         ...(prev[rarity] || { power: 0, bonus: 0, marketUrl: '' }),
-        [field]: field === 'marketUrl' ? value : parseFloat(value) || 0
+        [field]: finalValue
       }
     }));
   };
@@ -1062,9 +1106,14 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
         updatedAt: new Date().toISOString()
       };
 
-      await saveMiner(minerData);
+      const result = await saveMiner(minerData);
       
-      setUploadSuccess(true);
+      if (result.sheetSyncError) {
+        setUploadError(`Miner saved to DB, but Google Sheets sync failed: ${result.sheetSyncError}`);
+      } else {
+        setUploadSuccess(true);
+      }
+      
       fetchAllMiners(); // Refresh local list
       setTimeout(() => setUploadSuccess(false), 3000);
       
@@ -1428,20 +1477,21 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
                   onClick={() => handleManualSync('miners')}
                   disabled={!!isSyncing || !sheetConfigs.miners.sheetId}
                   className={cn(
-                    "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50",
+                    "px-6 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50",
                     syncSuccess === 'miners' 
                       ? "bg-emerald-500 text-white" 
                       : "bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-500"
                   )}
+                  title="Sync data from Google Sheets to Database"
                 >
                   {isSyncing === 'miners' ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : syncSuccess === 'miners' ? (
                     <CheckCircle2 className="w-3 h-3" />
                   ) : (
-                    <Database className="w-3 h-3" />
+                    <RefreshCw className="w-3 h-3" />
                   )}
-                  {syncSuccess === 'miners' ? 'Synced!' : 'Sync'}
+                  {syncSuccess === 'miners' ? 'Synced!' : 'Sync from Sheet'}
                 </button>
               </div>
 
@@ -1690,12 +1740,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
                               <input 
                                 type="text" 
                                 value={stats.power ?? ''}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === '' || /^\d*\.?\d*$/.test(val)) {
-                                    updateRarity(r, 'power', val);
-                                  }
-                                }}
+                                onChange={(e) => updateRarity(r, 'power', e.target.value)}
                                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500"
                               />
                             </div>
@@ -1704,12 +1749,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
                               <input 
                                 type="text" 
                                 value={stats.bonus ?? ''}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === '' || /^\d*\.?\d*$/.test(val)) {
-                                    updateRarity(r, 'bonus', val);
-                                  }
-                                }}
+                                onChange={(e) => updateRarity(r, 'bonus', e.target.value)}
                                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500"
                               />
                             </div>
@@ -1860,20 +1900,21 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
                         onClick={() => handleManualSync(type)}
                         disabled={!!isSyncing || !sheetConfigs[type].sheetId}
                         className={cn(
-                          "px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 disabled:opacity-50",
+                          "px-4 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 disabled:opacity-50",
                           syncSuccess === type 
                             ? "bg-emerald-500 text-white" 
                             : "bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-500"
                         )}
+                        title="Sync data from Google Sheets to Database"
                       >
                         {isSyncing === type ? (
                           <Loader2 className="w-3 h-3 animate-spin" />
                         ) : syncSuccess === type ? (
                           <CheckCircle2 className="w-3 h-3" />
                         ) : (
-                          <Database className="w-3 h-3" />
+                          <RefreshCw className="w-3 h-3" />
                         )}
-                        {syncSuccess === type ? 'Synced!' : 'Sync'}
+                        {syncSuccess === type ? 'Synced!' : 'Sync from Sheet'}
                       </button>
                     </div>
 
@@ -2116,20 +2157,21 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
                   onClick={() => handleManualSync('racks')}
                   disabled={!!isSyncing || !sheetConfigs.racks.sheetId}
                   className={cn(
-                    "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50",
+                    "px-6 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50",
                     syncSuccess === 'racks' 
                       ? "bg-emerald-500 text-white" 
                       : "bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-500"
                   )}
+                  title="Sync data from Google Sheets to Database"
                 >
                   {isSyncing === 'racks' ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : syncSuccess === 'racks' ? (
                     <CheckCircle2 className="w-3 h-3" />
                   ) : (
-                    <Database className="w-3 h-3" />
+                    <RefreshCw className="w-3 h-3" />
                   )}
-                  {syncSuccess === 'racks' ? 'Synced!' : 'Sync'}
+                  {syncSuccess === 'racks' ? 'Synced!' : 'Sync from Sheet'}
                 </button>
               </div>
 
@@ -2497,20 +2539,21 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
                   onClick={() => handleManualSync('sets')}
                   disabled={!!isSyncing || !sheetConfigs.sets.sheetId}
                   className={cn(
-                    "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50",
+                    "px-6 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50",
                     syncSuccess === 'sets' 
                       ? "bg-emerald-500 text-white" 
                       : "bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-500"
                   )}
+                  title="Sync data from Google Sheets to Database"
                 >
                   {isSyncing === 'sets' ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : syncSuccess === 'sets' ? (
                     <CheckCircle2 className="w-3 h-3" />
                   ) : (
-                    <Database className="w-3 h-3" />
+                    <RefreshCw className="w-3 h-3" />
                   )}
-                  {syncSuccess === 'sets' ? 'Synced!' : 'Sync'}
+                  {syncSuccess === 'sets' ? 'Synced!' : 'Sync from Sheet'}
                 </button>
               </div>
 
