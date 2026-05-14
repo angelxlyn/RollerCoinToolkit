@@ -153,6 +153,24 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
     }
   }, [sheetConfigs]);
   const [isSyncing, setIsSyncing] = useState<string | null>(null);
+  const [sheetsServiceStatus, setSheetsServiceStatus] = useState<{
+    hasServiceAccount: boolean;
+    serviceAccountValid: boolean;
+    serviceAccountEmail: string | null;
+    parseError: string | null;
+    hasConfig: boolean;
+  } | null>(null);
+
+  const checkSheetsStatus = async () => {
+    try {
+      const res = await fetch(`${window.location.origin}/api/debug-sheets`);
+      const data = await res.json();
+      setSheetsServiceStatus(data);
+      if (data.serviceAccountEmail) setServiceAccountEmail(data.serviceAccountEmail);
+    } catch (err) {
+      console.error('Error checking sheets status:', err);
+    }
+  };
   const [showPurgeConfirm, setShowPurgeConfirm] = useState<{ type: string } | null>(null);
 
   // Global Settings State
@@ -208,6 +226,7 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
 
   useEffect(() => {
     if (user) {
+      checkSheetsStatus();
       fetchSheetsConfig();
       fetchSets();
     }
@@ -463,8 +482,10 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
         if (type === 'racks') fetchRacks();
         if (type === 'sets') fetchSets();
         fetchSheetsConfig();
+        checkSheetsStatus();
       } else {
         setUploadError(data.message || data.error || "Sync failed");
+        checkSheetsStatus();
       }
     } catch (err: any) {
       setUploadError(err.message);
@@ -500,8 +521,10 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
         setSyncSuccess(type + '_push');
         setTimeout(() => setSyncSuccess(null), 5000);
         fetchSheetsConfig();
+        checkSheetsStatus();
       } else {
         setUploadError(data.error || data.message || "Push failed");
+        checkSheetsStatus();
       }
     } catch (err: any) {
       setUploadError(err.message);
@@ -1027,9 +1050,13 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
 
   const updateRarity = (rarity: Rarity, field: keyof FormMinerRarity, value: string) => {
     let finalValue = value;
-    if (field === 'power') {
+    if (field === 'power' || field === 'bonus') {
       // Remove spaces if pasted or typed
       finalValue = value.replace(/\s+/g, '');
+      
+      // Handle leading zeros: remove leading zeros if followed by another digit
+      // e.g., "0100" -> "100", "00.5" -> "0.5", but "0.5" and "0" remain the same
+      finalValue = finalValue.replace(/^0+(?=\d)/, '');
     }
     
     setRarities(prev => ({
@@ -1859,7 +1886,20 @@ export default function DatabaseManager({ editMiner, onCancelEdit, onEdit }: Dat
                 </div>
                 <div className="text-left">
                   <h3 className="text-sm font-bold text-white">Google Sheets Sync Configuration</h3>
-                  <p className="text-[10px] text-slate-500">Configure sheet IDs for rewards and times</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] text-slate-500">Configure sheet IDs for rewards and times</p>
+                    {sheetsServiceStatus && (
+                      <div className={cn(
+                        "flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider",
+                        sheetsServiceStatus.serviceAccountValid 
+                          ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" 
+                          : "bg-red-500/10 text-red-500 border border-red-500/20"
+                      )}>
+                        <div className={cn("w-1 h-1 rounded-full", sheetsServiceStatus.serviceAccountValid ? "bg-emerald-500" : "bg-red-500")} />
+                        {sheetsServiceStatus.serviceAccountValid ? "Service Account Connected" : "Service Account Missing/Invalid"}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
