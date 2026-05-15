@@ -181,7 +181,7 @@ app.get('/api/debug-supabase', async (req, res) => {
 
   try {
     const client = getAnonSupabase();
-    const { data, error } = await client.from('miners').select('id', { count: 'exact', head: true });
+    const { data, error } = await client.from('miners').select('id', { count: 'exact', head: true }).is('deletedAt', null);
     results.dbTest = error ? { error } : { success: true, count: data };
   } catch (err: any) {
     results.dbTest = { error: err.message };
@@ -282,9 +282,16 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
     if (syncType === "miners") {
       console.log(`Processing ${data.length} miners from sheet...`);
       if (overwrite) {
-        console.log("Overwrite mode enabled. Purging existing miners...");
-        const { error: deleteError } = await supabase.from('miners').delete().neq('id', '');
-        if (deleteError) throw deleteError;
+        console.log("Overwrite mode enabled. Attempting soft deleting existing miners...");
+        const { error: testError } = await supabase.from('miners').select('deletedAt').limit(1);
+        if (!testError) {
+          const { error: deleteError } = await supabase.from('miners').update({ deletedAt: new Date().toISOString() }).neq('id', '');
+          if (deleteError) throw deleteError;
+        } else {
+          console.log('[SYNC] miners.deletedAt missing, hard deleting instead');
+          const { error: deleteError } = await supabase.from('miners').delete().neq('id', '');
+          if (deleteError) throw deleteError;
+        }
       }
       const upsertData = data.map(raw => {
         try {
@@ -360,7 +367,12 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
           console.log(`[SYNC] Upserted chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(upsertData.length / chunkSize)}`);
         }
         
-        const { count: totalMiners } = await supabase.from('miners').select('id', { count: 'exact', head: true });
+        let countQuery = supabase.from('miners').select('id', { count: 'exact', head: true });
+        const { error: countTestError } = await supabase.from('miners').select('deletedAt').limit(1);
+        if (!countTestError) {
+          countQuery = countQuery.is('deletedAt', null);
+        }
+        const { count: totalMiners } = await countQuery;
         console.log(`[SYNC] Successfully synced miners. Total in DB: ${totalMiners}`);
         return { success: true, processed: upsertData.length, total: totalMiners, errors };
       } else {
@@ -371,9 +383,16 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
     else if (syncType === "racks") {
       console.log(`[SYNC] Processing ${data.length} racks from sheet...`);
       if (overwrite) {
-        console.log(`[SYNC] Overwrite mode enabled. Purging existing racks...`);
-        const { error: deleteError } = await supabase.from('racks').delete().neq('id', '');
-        if (deleteError) throw deleteError;
+        console.log(`[SYNC] Overwrite mode enabled. Attempting soft deleting existing racks...`);
+        const { error: testError } = await supabase.from('racks').select('deletedAt').limit(1);
+        if (!testError) {
+          const { error: deleteError } = await supabase.from('racks').update({ deletedAt: new Date().toISOString() }).neq('id', '');
+          if (deleteError) throw deleteError;
+        } else {
+          console.log('[SYNC] deletedAt column missing, falling back to hard delete');
+          const { error: deleteError } = await supabase.from('racks').delete().neq('id', '');
+          if (deleteError) throw deleteError;
+        }
       }
       const upsertData = data.map(raw => {
         try {
@@ -426,7 +445,12 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
           console.log(`[SYNC] Upserted chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(upsertData.length / chunkSize)}`);
         }
         
-        const { count: totalRacks } = await supabase.from('racks').select('*', { count: 'exact', head: true });
+        let countQuery = supabase.from('racks').select('*', { count: 'exact', head: true });
+        const { error: countTestError } = await supabase.from('racks').select('deletedAt').limit(1);
+        if (!countTestError) {
+          countQuery = countQuery.is('deletedAt', null);
+        }
+        const { count: totalRacks } = await countQuery;
         console.log(`[SYNC] Successfully synced racks. Total in DB: ${totalRacks}`);
         return { success: true, processed: upsertData.length, total: totalRacks, errors };
       } else {
@@ -437,9 +461,16 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
     else if (syncType === "sets") {
       console.log(`[SYNC] Processing ${data.length} rows for sets from sheet...`);
       if (overwrite) {
-        console.log(`[SYNC] Overwrite mode enabled. Purging existing sets...`);
-        const { error: deleteError } = await supabase.from('sets').delete().neq('id', '');
-        if (deleteError) throw deleteError;
+        console.log(`[SYNC] Overwrite mode enabled. Attempting soft deleting existing sets...`);
+        const { error: testError } = await supabase.from('sets').select('deletedAt').limit(1);
+        if (!testError) {
+          const { error: deleteError } = await supabase.from('sets').update({ deletedAt: new Date().toISOString() }).neq('id', '');
+          if (deleteError) throw deleteError;
+        } else {
+          console.log('[SYNC] sets.deletedAt missing, hard deleting instead');
+          const { error: deleteError } = await supabase.from('sets').delete().neq('id', '');
+          if (deleteError) throw deleteError;
+        }
       }
 
       // Group by Set name
@@ -469,6 +500,7 @@ async function syncGoogleSheets(syncType: string = "miners", overwrite: boolean 
             id,
             name,
             levels,
+            deletedAt: null,
             updatedAt: new Date().toISOString()
           };
         }
@@ -649,9 +681,17 @@ app.get('/api/racks', async (req, res) => {
     let hasMore = true;
 
     while (hasMore) {
-      const { data: racks, error } = await supabase
+      let query = supabase
         .from('racks')
-        .select('id, name, slots, bonus, image, "setId", "updatedAt", "marketUrl"')
+        .select('id, name, slots, bonus, image, "setId", "updatedAt", "marketUrl", "deletedAt"');
+
+      // Check if deletedAt column exists
+      const { error: testError } = await supabase.from('racks').select('deletedAt').limit(1);
+      if (!testError) {
+        query = query.is('deletedAt', null);
+      }
+
+      const { data: racks, error } = await query
         .range(from, to)
         .order('name', { ascending: true });
 
@@ -685,9 +725,17 @@ app.get('/api/sets', async (req, res) => {
     let hasMore = true;
 
     while (hasMore) {
-      const { data: sets, error } = await supabase
+      let query = supabase
         .from('sets')
-        .select('id, name, levels, "updatedAt"')
+        .select('id, name, levels, "updatedAt", "deletedAt"');
+
+      // Check if deletedAt column exists
+      const { error: testError } = await supabase.from('sets').select('deletedAt').limit(1);
+      if (!testError) {
+        query = query.is('deletedAt', null);
+      }
+
+      const { data: sets, error } = await query
         .range(from, to)
         .order('id', { ascending: true });
 
@@ -733,10 +781,19 @@ app.get('/api/miners', async (req, res) => {
     let to = 999;
     let hasMore = true;
 
+    // Build query
+    let query = supabase
+      .from('miners')
+      .select('id, name, image, cells:cell, description, tags, rarities, sellable, "setId", "updatedAt", "deletedAt"');
+
+    // Attempt to filter by deletedAt if the column exists
+    const { data: testData, error: testError } = await supabase.from('miners').select('deletedAt').limit(1);
+    if (!testError) {
+      query = query.is('deletedAt', null);
+    }
+
     while (hasMore) {
-      const { data: miners, error } = await supabase
-        .from('miners')
-        .select('id, name, image, cells:cell, description, tags, rarities, sellable, "setId", "updatedAt"')
+      const { data: miners, error } = await query
         .range(from, to)
         .order('name', { ascending: true });
 
@@ -986,10 +1043,59 @@ async function updateGoogleSheetRow(type: string, item: any, isDeletion: boolean
   return syncToGoogleSheets(type, [item], isDeletion);
 }
 
+app.get('/api/history', async (req, res) => {
+  try {
+    const supabase = getSupabase();
+    
+    // Check if table exists first
+    const { error: testError } = await supabase.from('database_history').select('id').limit(1);
+    if (testError && (testError.message.includes('Could not find the table') || testError.code === '42P01')) {
+      return res.json([]); // Return empty if table doesn't exist yet
+    }
+
+    const { data, error } = await supabase
+      .from('database_history')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .limit(100);
+      
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err: any) {
+    console.error('History fetch error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper to log database changes
+async function logDatabaseChange(type: string, action: string, entityId: string, entityName: string, details: any = {}) {
+  try {
+    const supabase = getSupabase();
+    await supabase.from('database_history').insert({
+      type,
+      action,
+      entityId,
+      entityName,
+      details,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('[HISTORY] Failed to log change:', err.message);
+  }
+}
+
 app.post('/api/miners', async (req, res) => {
   try {
     console.log('[API] POST /api/miners body:', JSON.stringify(req.body, null, 2));
-    const { id, name, description, cells, image, tags, rarities, sellable, setId } = req.body;
+    const { id: existingId, name, description, cells, image, tags, rarities, sellable, setId } = req.body;
+    
+    // Ensure ID uniqueness
+    const id = existingId || name.toLowerCase()
+      .replace(/'/g, '')
+      .replace(/\./g, '')
+      .replace(/-/g, '_')
+      .replace(/\s+/g, '_');
+
     const minerData = { 
       id, 
       name, 
@@ -1005,6 +1111,7 @@ app.post('/api/miners', async (req, res) => {
     console.log('[API] Upserting minerData:', JSON.stringify(minerData, null, 2));
     const { error } = await getSupabase().from('miners').upsert({
       ...minerData,
+      deletedAt: null,
       updatedAt: new Date().toISOString()
     }).select('id');
 
@@ -1012,6 +1119,9 @@ app.post('/api/miners', async (req, res) => {
       console.error('[API] Supabase upsert error:', error);
       throw error;
     }
+
+    // Log the change
+    await logDatabaseChange('miner', existingId ? 'update' : 'create', id, name, { sellable, setId });
 
     // Sync back to Google Sheets
     let sheetSyncError = null;
@@ -1033,12 +1143,15 @@ app.delete('/api/miners/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { data: miner, error: fetchError } = await getSupabase().from('miners').select('id, name, image, cells:cell, description, tags, rarities, sellable, "setId", "updatedAt"').eq('id', id).single();
+    const { data: miner, error: fetchError } = await getSupabase().from('miners').select('id, name').eq('id', id).is('deletedAt', null).single();
     if (fetchError) throw fetchError;
     if (!miner) return res.status(404).json({ error: "Miner not found" });
 
-    const { error: deleteError } = await getSupabase().from('miners').delete().eq('id', id);
+    const { error: deleteError } = await getSupabase().from('miners').update({ deletedAt: new Date().toISOString() }).eq('id', id);
     if (deleteError) throw deleteError;
+
+    // Log the change
+    await logDatabaseChange('miner', 'delete', id, miner.name);
 
     // Sync back to Google Sheets (deletion)
     await updateGoogleSheetRow('miners', miner, true);
@@ -1052,13 +1165,18 @@ app.delete('/api/miners/:id', async (req, res) => {
 app.post('/api/racks', async (req, res) => {
   try {
     const data = req.body;
+    const isUpdate = !!data.id;
     
     const { error } = await getSupabase().from('racks').upsert({
       ...data,
+      deletedAt: null,
       updatedAt: new Date().toISOString()
     });
 
     if (error) throw error;
+
+    // Log the change
+    await logDatabaseChange('rack', isUpdate ? 'update' : 'create', data.id || 'new', data.name, { bonus: data.bonus, slots: data.slots });
 
     // Sync back to Google Sheets
     let sheetSyncError = null;
@@ -1079,12 +1197,15 @@ app.delete('/api/racks/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { data: rack, error: fetchError } = await getSupabase().from('racks').select('id, name, slots, bonus, image, "setId", "updatedAt", "marketUrl"').eq('id', id).single();
+    const { data: rack, error: fetchError } = await getSupabase().from('racks').select('id, name').eq('id', id).is('deletedAt', null).single();
     if (fetchError) throw fetchError;
     if (!rack) return res.status(404).json({ error: "Rack not found" });
 
-    const { error: deleteError } = await getSupabase().from('racks').delete().eq('id', id);
+    const { error: deleteError } = await getSupabase().from('racks').update({ deletedAt: new Date().toISOString() }).eq('id', id);
     if (deleteError) throw deleteError;
+
+    // Log the change
+    await logDatabaseChange('rack', 'delete', id, rack.name);
 
     // Sync back to Google Sheets (deletion)
     await updateGoogleSheetRow('racks', rack, true);
@@ -1098,13 +1219,18 @@ app.delete('/api/racks/:id', async (req, res) => {
 app.post('/api/sets', async (req, res) => {
   try {
     const data = req.body;
+    const isUpdate = !!data.id;
     
     const { error } = await getSupabase().from('sets').upsert({
       ...data,
+      deletedAt: null,
       updatedAt: new Date().toISOString()
     });
 
     if (error) throw error;
+
+    // Log the change
+    await logDatabaseChange('set', isUpdate ? 'update' : 'create', data.id || 'new', data.name, { levels: data.levels?.length });
 
     // Sync back to Google Sheets
     let sheetSyncError = null;
@@ -1125,12 +1251,15 @@ app.delete('/api/sets/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { data: set, error: fetchError } = await getSupabase().from('sets').select('id, name, levels, "updatedAt"').eq('id', id).single();
+    const { data: set, error: fetchError } = await getSupabase().from('sets').select('id, name').eq('id', id).is('deletedAt', null).single();
     if (fetchError) throw fetchError;
     if (!set) return res.status(404).json({ error: "Set not found" });
 
-    const { error: deleteError } = await getSupabase().from('sets').delete().eq('id', id);
+    const { error: deleteError } = await getSupabase().from('sets').update({ deletedAt: new Date().toISOString() }).eq('id', id);
     if (deleteError) throw deleteError;
+
+    // Log the change
+    await logDatabaseChange('set', 'delete', id, set.name);
 
     // Sync back to Google Sheets (deletion)
     await updateGoogleSheetRow('sets', set, true);
@@ -1204,6 +1333,7 @@ app.post('/api/miners/bulk', upload.single('file'), async (req, res) => {
           rarities,
           sellable: String(raw.Sellable || raw.sellable).toLowerCase() === 'true',
           setId: raw.Set || raw.setId || undefined,
+          deletedAt: null,
           updatedAt: new Date().toISOString()
         };
 
@@ -1221,6 +1351,9 @@ app.post('/api/miners/bulk', upload.single('file'), async (req, res) => {
         console.error('[API] Bulk upsert error:', error);
         throw error;
       }
+
+      // Log bulk change
+      await logDatabaseChange('miner', 'bulk_upsert', 'bulk', 'Multiple Miners', { count: upsertData.length });
 
       // Sync back to Google Sheets in background using batch sync
       if (upsertData.length <= 100) {
@@ -1274,6 +1407,7 @@ app.post('/api/racks/bulk', upload.single('file'), async (req, res) => {
           image: raw["Image ID"] || raw.image || '',
           marketUrl: raw["Market ID"] || raw.marketUrl || '',
           setId: raw.Set || raw.setId || undefined,
+          deletedAt: null,
           updatedAt: new Date().toISOString()
         };
 
@@ -1287,6 +1421,9 @@ app.post('/api/racks/bulk', upload.single('file'), async (req, res) => {
     if (upsertData.length > 0) {
       const { error } = await getSupabase().from('racks').upsert(upsertData);
       if (error) throw error;
+
+      // Log bulk change
+      await logDatabaseChange('rack', 'bulk_upsert', 'bulk', 'Multiple Racks', { count: upsertData.length });
 
       // Sync back to Google Sheets in background using batch sync
       if (upsertData.length <= 100) {
@@ -1340,6 +1477,14 @@ app.post('/api/settings', async (req, res) => {
     });
 
     if (error) throw error;
+
+    // Log the change
+    if (settingsData.blockRewards) {
+      await logDatabaseChange('blocks', 'update', 'rewards', 'Block Rewards', { count: Object.keys(settingsData.blockRewards).length });
+    }
+    if (settingsData.blockTimes) {
+      await logDatabaseChange('blocks', 'update', 'times', 'Block Times', { count: Object.keys(settingsData.blockTimes).length });
+    }
 
     // Sync back to Google Sheets
     if (settingsData.blockRewards) {
@@ -1405,6 +1550,7 @@ app.post('/api/push-sheets', async (req, res) => {
       const { data, error } = await supabase
         .from(type)
         .select('*')
+        .is('deletedAt', null)
         .range(from, to);
 
       if (error) throw error;
