@@ -195,7 +195,9 @@ async function checkSupabaseConnection() {
     getSupabase();
     console.log("Supabase client initialized.");
     // Start background sync
-    startBackgroundSync();
+    if (!process.env.VERCEL) {
+      startBackgroundSync();
+    }
   } catch (err: any) {
     console.warn(err.message);
   }
@@ -1598,10 +1600,12 @@ app.post('/api/push-sheets', async (req, res) => {
 });
 
 // Vite Integration
+export default app;
+
 async function startServer() {
   await checkSupabaseConnection();
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -1615,19 +1619,23 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-      console.warn('[WARN] GOOGLE_SERVICE_ACCOUNT_JSON is not set. Google Sheets sync will not work.');
-    } else {
-      try {
-        JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-        console.log('[INFO] GOOGLE_SERVICE_ACCOUNT_JSON is set and valid JSON.');
-      } catch (e) {
-        console.error('[ERROR] GOOGLE_SERVICE_ACCOUNT_JSON is set but NOT valid JSON.');
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+        console.warn('[WARN] GOOGLE_SERVICE_ACCOUNT_JSON is not set. Google Sheets sync will not work.');
+      } else {
+        try {
+          JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+          console.log('[INFO] GOOGLE_SERVICE_ACCOUNT_JSON is set and valid JSON.');
+        } catch (e) {
+          console.error('[ERROR] GOOGLE_SERVICE_ACCOUNT_JSON is set but NOT valid JSON.');
+        }
       }
-    }
-  });
+    });
+  }
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
